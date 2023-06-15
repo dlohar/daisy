@@ -1,0 +1,9 @@
+cff-version: 1.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: Lohar, Darulova
+    given-names: Debasmita, Eva
+    orcids: https://orcid.org/0000-0001-8639-4116, https://orcid.org/0000-0002-6848-3163
+title: dlohar/daisy: PrAn
+version: v1
+date-released: 2023-06-15
