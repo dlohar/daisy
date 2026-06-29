@@ -9,7 +9,6 @@ import scala.collection.immutable.Seq
 
 import lang.Trees._
 import lang.Identifiers._
-import lang.Extractors._
 import tools.FinitePrecision._
 import tools._
 import lang.Trees.RealLiteral.{zero, one, two}
@@ -20,7 +19,6 @@ import lang.Trees.RealLiteral.{zero, one, two}
 object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools.Taylor {
 
   override val name = "Metalibm"
-  override val shortName = "metalibm"
   override val description = "generates elementary functions from metalibm tool"
   override val definedOptions: Set[CmdLineOption[Any]] = Set(
     NumOption("timeout", 120, "Hand over to Daisy when timout is outdated"),
@@ -37,12 +35,14 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
     StringChoiceOption("errorDist", Set("deriv", "equal"), "equal", "How to dsitribute the error budget.")
   )
 
-  implicit val debugSection = DebugSectionOptimisation
+  override implicit val debugSection = DebugSectionOptimization
 
   var reporter: Reporter = null
   var timeOut: Int = 0
   val quote = "\""   // there is a bug with Scala's string interpolation
   val dollar = "$"
+
+  val metalibmPath = "metalibm-for-daisy"
 
   override def runPhase(ctx: Context, prg: Program): (Context, Program) = {
     reporter = ctx.reporter
@@ -52,7 +52,7 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
     val extraError = Rational.fromString(ctx.option[Option[String]]("extraError").getOrElse("-1"))
     val errorDist = ctx.option[String]("errorDist")
 
-    val targetError  =  precision match { case f @ FloatPrecision(_) => f.machineEpsilon }
+    //val targetError  =  precision match { case f @ FloatPrecision(_) => f.machineEpsilon }
     val minWidthToString = "(sup(dom) - inf(dom)) * 1/" + ctx.option[Long]("minWidth").toString
     val metaSplitMinWidthToString = "(sup(dom) - inf(dom)) * 1/" + ctx.option[Long]("metaSplitMinWidth").toString
 
@@ -118,9 +118,9 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
           ctx.specResultErrorBounds(fnc.id) - ctx.resultAbsoluteErrors(fnc.id)
         }
 
-        val (newBody, _approx) = insertApproxNode(fnc.body.get,
+        val (newBody, _approx): (Expr, Seq[(String, String, String)]) = insertApproxNode(fnc.body.get,
           ctx.originalFunctions(fnc.id).body.get, intermRange, intermAbsError,
-          params, normElemFactors, approxError, errorDist)
+          params, normElemFactors.toMap, approxError, errorDist)
         approxs = approxs ++ _approx
 
         // sanity check so we don't benchmark mathh and think it's Metalibm
@@ -135,15 +135,10 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
       Program(prg.id, newDefs)
     }
 
-
-    /* When Benchmarking is used we have to link the objects for compilation */
-    if (ctx.hasFlag("benchmarking")) {
-      writeCompileScript(prg.id, approxs)
-    }
-
     val wrappers: Seq[String] = generateWrappers(approxs, precision)
 
-    (ctx.copy(wrapperFunctions=wrappers), newProgram)
+    (ctx.copy(metalibmWrapperFunctions=wrappers, metalibmGeneratedFiles=approxs.map(_._1)),
+      newProgram)
   }
 
   def getElementaryVariables(e: Expr): Seq[Identifier] = e match {
@@ -174,7 +169,7 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
         reporter.info(s"Try to approximate $value in $domain:")
         val fncToApprox = value.toString // the expression that we want to approximate
 
-        var paramsUpdated = params + (
+        var paramsUpdated = params.+(
           "dom" -> domain.toString,
           "f"   -> fncToApprox)
 
@@ -192,7 +187,10 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
           val inputRanges = lang.TreeOps.allVariablesOf(bodyForDeriv).map({
             id => (id -> intermRange(Variable(id), emptyPath))
           }).toMap
-          val bound = evalRange[Interval](deriv, inputRanges, Interval.apply)._1
+          //val bound = evalRange[Interval](deriv, inputRanges, Interval.apply)._1
+          val bound = evalRange[SMTRange](deriv,
+            inputRanges.map({ case (id, int) => (id -> SMTRange(Variable(id), int, BooleanLiteral(true))) }),
+            SMTRange.apply(_, BooleanLiteral(true)))._1.toInterval
           val maxDeriv = Interval.maxAbs(bound)
 
           val localError = totalError / maxDeriv
@@ -232,7 +230,8 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
 
   def containsElemFnc(e: Expr): Boolean = {
     lang.TreeOps.exists {
-      case Sin(_) | Cos(_) | Tan(_) | Exp(_) | Log(_) | Sqrt(_) => true
+      case Sin(_) | Cos(_) | Tan(_) | Exp(_) | Log(_) | Sqrt(_) |
+        Atan(_) | Asin(_) | Acos(_) => true
     }(e)
   }
 
@@ -335,7 +334,7 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
     /* Write the problem definition */
     val timestamp: Long = System.currentTimeMillis / 1000
     val problemDefName = s"problemdefForDaisy_$timestamp.sollya"
-    val problemdef = new PrintWriter(new File("metalibm/" + problemDefName))
+    val problemdef = new PrintWriter(new File(metalibmPath + "/" + problemDefName))
     problemdef.write(params.map({case (k, v) => s"$k = $v"}).mkString("", ";\n", ";"))
     problemdef.close()
 
@@ -344,7 +343,7 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
 
     val f: Future[Unit] = Future {
       val problemDefRes = Runtime.getRuntime().exec(s"./metalibm.sollya $problemDefName",
-        null, new File("metalibm/"))  //run in metalibm4daisy directory
+        null, new File(metalibmPath))  //run in metalibm4daisy directory
 
       /* Read the problemDefRes */
       val stdInput =  new BufferedReader(new InputStreamReader(problemDefRes.getInputStream))
@@ -399,10 +398,10 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
 
 
   def generateWrappers(generatedFunctions: Seq[(String, String, String)], precision: Precision): Seq[String] = {
-    val precString = precision match {
-      case FloatPrecision(32) => "float"
-      case FloatPrecision(64) => "double"
-    }
+    //val precString = precision match {
+    //  case FloatPrecision(32) => "float"
+    //  case FloatPrecision(64) => "double"
+    //}
 
     val prototypes = generatedFunctions.map({ case (_, fncName, signature) => signature match {
       case "D_TO_D" =>
@@ -415,35 +414,6 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
     }) :+ "\n"
 
     prototypes
-  }
-
-  // Generates script so that we can compile the approximations
-  def writeCompileScript(programId: Identifier, generatedFunctions: Seq[(String, String, String)]): Unit = {
-    val script = new PrintWriter(new File(s"output/${programId}_compileScript.sh"))
-
-    script.write("#!/bin/bash --posix\n\n\n")
-
-    script.write("cd ./output/\n")
-    script.write("echo \"#include \\\"expansion.h\\\"\" >> ")
-    script.write(s"${programId}.c \n")
-    script.write(s"echo ' ' >> ${programId}.c \n")
-
-    for ((fileName, fncName, signature) <- generatedFunctions) {
-      script.write(s"cat ${fileName}")
-      script.write("| sed -e 's/void/static inline void/g;' | sed -e \"s/static inline void ")
-      script.write(s"${fncName}(/void ${fncName}")
-      script.write("(/g;\" >> ")
-      script.write(s"${programId}.c \n")
-    }
-
-    if (System.getProperty("os.name") == "Mac OS X") {
-      script.write(s"g++-8 -Winline -finline-limit=1200 -O2 -fPIC -std=c++11 -c ${programId}.c ${programId}_benchmark.c\n")
-      script.write(s"g++-8 -o ${programId}_exe ${programId}.o ${programId}_benchmark.o -lm\n")
-    } else {
-      script.write(s"g++ -Winline -finline-limit=1200 -O2 -fPIC -std=c++11 -c ${programId}.c ${programId}_benchmark.c\n")
-      script.write(s"g++ -o ${programId}_exe ${programId}.o ${programId}_benchmark.o -lm\n")
-    }
-    script.close()
   }
 
   /**
@@ -530,6 +500,17 @@ object MetalibmPhase extends DaisyPhase with tools.RoundoffEvaluators with tools
       Division(getDerivative(x, wrt), x)
     case z @ Log(x) => zero
 
+    case z @ Atan(x) if containsVariables(x, wrt) =>
+      Division(getDerivative(x, wrt), Plus(one, Times(x, x)))
+    case z @ Atan(x) => zero
+
+    case z @ Asin(x) if containsVariables(x, wrt) =>
+      Division(getDerivative(x, wrt), Sqrt(Minus(one, Times(x, x))))
+    case z @ Asin(x) => zero
+
+    case z @ Acos(x) if containsVariables(x, wrt) =>
+      UMinus(Division(getDerivative(x, wrt), Sqrt(Minus(one, Times(x, x)))))
+    case z @ Acos(x) => zero
 
     case z @ Let(x, value, body) if containsVariables(body, wrt) =>
       getDerivative(body, wrt)

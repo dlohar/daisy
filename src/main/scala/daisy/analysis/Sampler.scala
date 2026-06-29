@@ -34,7 +34,7 @@ object Sampler {
     def next: Map[Identifier, Double] = {
       ranges.map({
         case (x, Interval(a, b)) =>
-          (x -> (lowerBounds(x) + random.nextDouble * diameter(x)))
+          (x -> (lowerBounds(x) + random.nextDouble() * diameter(x)))
       })
     }
 
@@ -59,19 +59,9 @@ object Sampler {
 
     def next: Map[Identifier, Double] = {
       ranges.map({
-        case (x, i @ Interval(a, b)) =>
-          if (a == b) {
-            (x -> a.toDouble)
-          } else {
-            var found = false
-            var sample = 0.0
-            while (!found) {
-              val r = random.nextGaussian
-              sample = mean(x) + stdDev(x) * r
-              found = i.includes(Rational.fromDouble(sample))
-            }
-            (x -> sample)
-          }
+        case (x, Interval(a, b)) =>
+          (x -> (lowerBounds(x) + random.nextDouble() * diameter(x)).toString)
+
       })
     }
 

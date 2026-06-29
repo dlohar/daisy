@@ -11,15 +11,17 @@ object MPFRFloat {
 
   // if this is changed in some way, make sure you check all the places
   // where MPFRFloats have been used!
-  val context = BinaryMathContext.BINARY128  // TODO, BinaryMathContext seems immutable
+  val context = new BinaryMathContext(113,15, java.math.RoundingMode.HALF_EVEN) // same as BinaryMathContext.BINARY128
   val roundUpContext = new BinaryMathContext(128, java.math.RoundingMode.CEILING)
   val roundDownContext = new BinaryMathContext(128, java.math.RoundingMode.FLOOR)
   // val context = new BinaryMathContext(500, 24)
   // val context = BinaryMathContext.BINARY128
   def fromString(s: String): MPFRFloat = new MPFRFloat(new BigFloat(s, context))
-  // def fromInt(i: Integer): MPFRFloat = new MPFRFloat(new BigFloat(i, context))
 
+  def fromStringUp(s: String): MPFRFloat = new MPFRFloat(new BigFloat(s, roundUpContext))
+  def fromStringDown(s: String): MPFRFloat = new MPFRFloat(new BigFloat(s, roundDownContext))
   def fromDouble(d: Double): MPFRFloat = new MPFRFloat(new BigFloat(d, context))
+  def fromRational(r: Rational): MPFRFloat = new MPFRFloat(new BigFloat(r.toLongString, context))
 
   val Pi: MPFRFloat = new MPFRFloat(BigFloat.pi(context))
   val E: MPFRFloat = new MPFRFloat(BigFloat.e(context))
@@ -88,8 +90,10 @@ object MPFRFloat {
   def abs(x: MPFRFloat): MPFRFloat = new MPFRFloat(x.bf.abs)
 
   def max(x: MPFRFloat, y: MPFRFloat): MPFRFloat = new MPFRFloat(BigFloat.max(x.bf, y.bf, context))
+  def max(es: Seq[MPFRFloat]): MPFRFloat = es.tail.foldLeft(es.head)({case (acc, x) => max(acc,x)})
 
   def min(x: MPFRFloat, y: MPFRFloat): MPFRFloat = new MPFRFloat(BigFloat.min(x.bf, y.bf, context))
+  def min(es: Seq[MPFRFloat]): MPFRFloat = es.tail.foldLeft(es.head)({case (acc, x) => min(acc,x)})
 }
 
 
@@ -100,7 +104,7 @@ class MPFRFloat(val bf: BigFloat) extends ScalaNumber with Ordered[MPFRFloat] {
   import MPFRFloat._
 
 
-  def unary_-(): MPFRFloat = new MPFRFloat(bf.negate)
+  def unary_- = new MPFRFloat(bf.negate)
   def +(that: MPFRFloat): MPFRFloat = new MPFRFloat(this.bf.add(that.bf, context))
   def up_+(that: MPFRFloat): MPFRFloat = new MPFRFloat(this.bf.add(that.bf, roundUpContext))
   def down_+(that: MPFRFloat): MPFRFloat = new MPFRFloat(this.bf.add(that.bf, roundDownContext))
@@ -161,8 +165,12 @@ class MPFRFloat(val bf: BigFloat) extends ScalaNumber with Ordered[MPFRFloat] {
   }
 
   // Members declared in scala.math.ScalaNumber
-  def isWhole(): Boolean = new BigFloat(bf.intValue, context).equals(bf)
-  def underlying(): Object = ???  // not sure what this is supposed to be
+  // todo bad comparison! eq( compares bf.op._mpfr_prec as well
+  //  e.g., for bf = 1 was different _mpfr_prec of bf = 128, _mpfr_prec of the new object is 113
+  //def isWhole(): Boolean = new BigFloat(bf.intValue, context).equals(bf)
+  def fractionPart: MPFRFloat = abs(this - new MPFRFloat(new BigFloat(bf.intValue, context)))
+  def isWhole(): Boolean = this.fractionPart == MPFRFloat.zero
+  def underlying(): Object = ???  // not sure what this is supposed to be (used in string interpolation)
 
   override def equals(other: Any): Boolean = other match {
 

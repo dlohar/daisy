@@ -9,7 +9,6 @@ import lang.Identifiers._
 import FinitePrecision._
 import Rational._
 import daisy.utils.CachingMap
-import scala.collection.immutable.Seq
 
 trait RoundoffEvaluators extends RangeEvaluators {
 
@@ -36,7 +35,7 @@ trait RoundoffEvaluators extends RangeEvaluators {
 
     val (resRoundoff, _) = evalRoundoff[AffineForm](expr, intermediateRanges,
       Map.empty.withDefaultValue(uniformPrecision),
-      inputErrorMap.mapValues(AffineForm.+/-),
+      inputErrorMap.mapValues(AffineForm.+/-).toMap,
       zeroError = AffineForm.zero,
       fromError = AffineForm.+/-,
       interval2T = AffineForm.apply,
@@ -65,12 +64,12 @@ trait RoundoffEvaluators extends RangeEvaluators {
     approxRoundoff: Boolean = false): (Rational, Interval) = {
 
     val (resRange, intermediateRanges) = evalRange[AffineForm](expr,
-      inputValMap.mapValues(AffineForm(_)), AffineForm.apply)
+      inputValMap.mapValues(AffineForm(_)).toMap, AffineForm.apply)
 
     val (resRoundoff, _) = evalRoundoff[AffineForm](expr,
-      intermediateRanges.mapValues(_.toInterval),
+      intermediateRanges.mapValues(_.toInterval).toMap,
       Map.empty.withDefaultValue(uniformPrecision),
-      inputErrorMap.mapValues(AffineForm.+/-),
+      inputErrorMap.mapValues(AffineForm.+/-).toMap,
       zeroError = AffineForm.zero,
       fromError = AffineForm.+/-,
       interval2T = AffineForm.apply,
@@ -104,9 +103,9 @@ trait RoundoffEvaluators extends RangeEvaluators {
       SMTRange.apply(_, precondition))
 
     val (resRoundoff, _) = evalRoundoff[AffineForm](expr,
-      intermediateRanges.mapValues(_.toInterval),
+      intermediateRanges.mapValues(_.toInterval).toMap,
       Map.empty.withDefaultValue(uniformPrecision),
-      inputErrorMap.mapValues(AffineForm.+/-),
+      inputErrorMap.mapValues(AffineForm.+/-).toMap,
       zeroError = AffineForm.zero,
       fromError = AffineForm.+/-,
       interval2T = AffineForm.apply,
@@ -148,11 +147,14 @@ trait RoundoffEvaluators extends RangeEvaluators {
     interval2T: Interval => T,
     constantsPrecision: Precision,
     trackRoundoffErrors: Boolean, // if false, propagate only initial errors
-    approxRoundoff: Boolean = false
+    approxRoundoff: Boolean = false,
+    resultAbsErrors: Map[Identifier, Rational] = Map(),
+    resultErrorsMetalibm: Map[Expr, Rational] = Map(),
+    precomputedIntermedErrs: CachingMap[(Expr, PathCond), (T, Precision)] = CachingMap.empty[(Expr, PathCond), (T, Precision)]()
     ): (T, Map[(Expr, PathCond), T]) = {
 
 
-    val intermediateErrors = new CachingMap[(Expr, PathCond), (T, Precision)]
+    val intermediateErrors = if (precomputedIntermedErrs.nonEmpty) precomputedIntermedErrs else new CachingMap[(Expr, PathCond), (T, Precision)]
 
     for ((id, err) <- freeVarsError){
       intermediateErrors.put((Variable(id), emptyPath), (err, precision(id)))
@@ -184,6 +186,7 @@ trait RoundoffEvaluators extends RangeEvaluators {
           fromError(constantsPrecision.absRoundoff(r))
         }
         (error, constantsPrecision)
+      case (Int32Literal(i), _) => (zeroError, constantsPrecision) // todo check something for i?
 
       // these can appear after mixed-precision tuning
       case x @ (FinitePrecisionLiteral(r, prec, _), _) =>
@@ -311,12 +314,24 @@ trait RoundoffEvaluators extends RangeEvaluators {
           throw NegativeSqrtException("trying to take the square root of a negative number or zero")
         }
 
-        val a = Interval.minAbs(rangeT)
+        val mepsilon = prec match {
+          case pr@FloatPrecision(_) => pr.machineEpsilon
+          case FixedPrecision(_) => throw DaisyFatalError(Some("Square root error computation for fixed-point numbers is undefined.")) // see todo
+        }
+        val a = try {
+          Interval.minAbs(rangeT)
+        } catch {
+          case _: AssertionError =>  mepsilon // if the lower bound is near or equals zero, can't compute minAbs()
+        }
         val errorMultiplier = Rational(1L, 2L) / sqrtDown(a)
 
         val propagatedError = errorT * errorMultiplier
+        // PRECiSa's way of computing the error would be
+        //val errorMultiplier = Rational(1L, 2L)* Rational.fromDouble(Math.ulp(sqrtUp(a).toDouble))
+        //val propagatedError = errorT + fromError(errorMultiplier)
 
         // TODO: check that this operation exists for this precision
+        //println("range map is " + range)
         computeNewError(range(x), propagatedError, prec)
 
       case x @ (Sin(t), path) =>
@@ -391,10 +406,19 @@ trait RoundoffEvaluators extends RangeEvaluators {
         // TODO not supported for fixed-points
         val (errorT, prec) = eval(t, path)
 
-        // compute the max slope (derivative), will be one of the end points
-        // instead of trying to figure out which one, compute both
+        // compute the max slope (derivative)
         val Interval(a, b) = range(t, path)
-        val errorMultiplier = max(abs(1 / (1 + a * a)), abs(1 / (1 + b * b)))
+        val errorMultiplier = if (a >= Rational.zero) {
+          // The interval is fully above zero, so the maximum derivative is at 1 / (a**2 + 1)
+          1 / (a * a + Rational.one)
+        } else if (b <= Rational.zero) {
+          // The interval is fully below zero, so the maximum derivative is at 1 / (b**2 + 1), since b is the closest to
+          // zero.
+          1 / (b * b + Rational.one)
+        } else {
+          // The interval contains zero, so the maximum value is 1 / (0**2 + 1) = 1
+          Rational.one
+        }
         val propagatedError = errorT * errorMultiplier
 
         // TODO: check that this operation exists for this precision
@@ -464,21 +488,59 @@ trait RoundoffEvaluators extends RangeEvaluators {
           throw new Exception("Unknown variable: " + id)
 
       case x @ (IfExpr(cond, thenn, elze), path) =>
-        // TODO: do something with the condition
-        val (errorThen, precThen) = eval(thenn, path :+ cond)
-        val (errorElse, precElse) = eval(elze, path :+ lang.TreeOps.negate(cond))
 
-        val propagatedError = interval2T(errorThen.toInterval.union(errorElse.toInterval))// take max of the two errors
+        // a branch is feasible if the range for it exists
+        val thenRes: Option[(T, Precision)] = range.get((thenn, path :+ cond)) match {
+          case Some(_) => Some(eval(thenn, path :+ cond))
+          case _ => None
+        }
 
-        computeNewError(range(x), propagatedError, getUpperBound(precThen, precElse))
+        val elseRes: Option[(T, Precision)] = range.get((elze, path :+ lang.TreeOps.negate(cond))) match {
+          case Some(_) => Some(eval(elze, path :+ lang.TreeOps.negate(cond)))
+          case _ => None
+        }
+
+        (thenRes, elseRes) match {
+          case (Some((errorThen, precThen)), Some((errorElse, precElse))) =>
+            val propagatedError = interval2T(errorThen.toInterval.union(errorElse.toInterval))// take max of the two errors
+            computeNewError(range(x), propagatedError, getUpperBound(precThen, precElse))
+
+          case (Some((errorThen, precThen)), None) =>
+            computeNewError(range(x), errorThen, precThen)
+
+          case (None, Some((errorElse, precElse))) =>
+            computeNewError(range(x), errorElse, precElse)
+
+          case (None, None) => // should not happen; should have already failed for ranges
+            throw new Exception("Not supported")
+        }
 
       case x @ (Cast(t, FinitePrecisionType(prec)), path) =>
         val (errorT, precT) = eval(t, path)
 
-        // add new roundoff error corresponding to the cast precision
-        computeNewError(range(x), errorT, prec)
+        if (prec > precT) {
+          // upcast does not lead to roundoff error
+          (errorT, prec)
+        } else {
+          // add new roundoff error corresponding to the cast precision
+          computeNewError(range(x), errorT, prec)
+        }
 
-      case _ => throw new Exception("Not supported")
+      case x @ (ApproxPoly(orig, _, fncId, totalError), path) =>
+        val approxPrec = (fncId.getType: @unchecked) match {
+          case FinitePrecisionType(a) => Some(a)
+          case _ =>
+            // approx fnc must already have finite precision assignedinf
+            throw new Exception(s"Approximation must have precision assigned ${x._1}")
+        }
+
+        // TODO: store resultAbsError directly in ApproxNode?
+        if (resultAbsErrors.contains(fncId))
+          (fromError(resultErrorsMetalibm(x._1) + resultAbsErrors(fncId)), approxPrec.get)
+        else
+          (fromError(totalError), approxPrec.get) // for another Metalibm phase (not ApproxPhase)
+
+      case x => throw new Exception(s"Not supported $x")
 
     })
 

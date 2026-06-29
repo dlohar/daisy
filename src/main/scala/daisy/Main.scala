@@ -4,9 +4,7 @@
 package daisy
 
 import java.io.File
-
 import daisy.tools.FinitePrecision._
-
 import lang.Trees.Program
 
 object Main {
@@ -27,9 +25,6 @@ object Main {
     FlagOption(
       "dynamic",
       "Run dynamic analysis"),
-    FlagOption(
-      "bgrtdynamic",
-      "Run binary guided random testing dynamic analysis"),
     FlagOption(
       "codegen",
       "Generate code (as opposed to just doing analysis)"),
@@ -64,14 +59,13 @@ object Main {
     ChoiceOption(
       "precision",
       Map("Float16" -> Float16, "Float32" -> Float32, "Float64" -> Float64,
-        "Quad" -> DoubleDouble, "QuadDouble" -> QuadDouble,
-        "Fixed8" -> FixedPrecision(8), "Fixed16" -> FixedPrecision(16),
-        "Fixed32" -> FixedPrecision(32), "Fixed64" -> FixedPrecision(64)),
+        "Quad" -> DoubleDouble, "QuadDouble" -> QuadDouble) ++
+        (1 to 64).map(x => ("Fixed" + x -> FixedPrecision(x))),
       "Float64",
       "(Default, uniform) precision to use"),
     StringChoiceOption(
       "rangeMethod",
-      Set("affine", "interval", "smt"),
+      Set("affine", "interval", "smt", "intervalMPFR", "affineMPFR"),
       "interval",
       "Method for range analysis"),
     FlagOption(
@@ -89,11 +83,11 @@ object Main {
     FlagOption(
       "pow-roll",
       "Roll products, e.g. x*x*x -> pow(x, 3)"
-      ),
+    ),
     FlagOption(
       "pow-unroll",
       "Unroll products, e.g. pow(x, 3) => x*x*x"
-      ),
+    ),
     StringOption(
       "mixed-precision",
       """File with type assignment for all variables.
@@ -110,15 +104,29 @@ object Main {
       "denormals",
       "Include parameter for denormals in the FP abstraction (for optimization-based approach only)."),
 
-    FlagOption("rewrite-fitness-eval", "Generate expressions and analyze errors for various fitness functions"),
-    FlagOption("rewrite-stability-experiment", "Run rewriting stability experiment."),
+
     FlagOption("mixed-cost-eval", "Mixed-precision cost function evaluation experiment"),
     FlagOption("mixed-exp-gen", "Mixed-precision experiment generation"),
-
     FlagOption("mixed-tuning", "Perform mixed-precision tuning"),
+    FlagOption(
+      "approx",
+      "Replaces expensive transcendental function calls with its approximations"
+    ),
+    StringOption(
+      "spec",
+      "Specification file with intervals for input variables and target error."),
+    StringChoiceOption(
+      "cost",
+      Set("area", "ml", "combined"),
+      "area",
+      "Cost function for mixed-tuning and approximation phases."),
 
     FlagOption("metalibm", "approximate an elementary function from Metalibm"),
-    FlagOption("benchmarking", "generates the benchmark file")
+    FlagOption("benchmarking", "generates the benchmark file"),
+    FlagOption("print-ast", "prints the AST of a parsed program"),
+    FlagOption("unroll", "unrolls all loops over DS [WARN] only used with --print-ast at the moment"),
+    FlagOption("ds", "applies abstraction to data structures and computes ranges, errors"),
+    FlagOption("ds-naive", "naive analysis of programs with data structures (ranges, errors)")
   )
 
   lazy val allPhases: Set[DaisyPhase] = Set(
@@ -127,6 +135,8 @@ object Main {
     analysis.AbsErrorPhase,
     analysis.RangePhase,
     analysis.DataflowPhase,
+    analysis.DSAbstractionPhase,
+    analysis.DSNaivePhase,
     analysis.RelativeErrorPhase,
     analysis.TaylorErrorPhase,
     analysis.DataflowSubdivisionPhase,
@@ -136,21 +146,20 @@ object Main {
     transform.TACTransformerPhase,
     transform.PowTransformerPhase,
     analysis.DynamicPhase,
-    analysis.BGRTDynamicPhase,
     opt.RewritingOptimizationPhase,
     transform.ConstantTransformerPhase,
     opt.MixedPrecisionOptimizationPhase,
-    experiment.RewritingFitnessEvaluation,
     experiment.MixedPrecisionExperimentGenerationPhase,
-    experiment.CompilerOptimizationsExperimentGenerationPhase,
     experiment.CostFunctionEvaluationExperiment,
     backend.InfoPhase,
     frontend.ExtractionPhase,
+    frontend.CExtractionPhase,
+    opt.ApproxPhase,
     opt.MetalibmPhase,
     //transform.ReassignElemFuncPhase,
     experiment.BenchmarkingPhase,
-    experiment.BenchmarkingRDTSCPhase,
-    transform.DecompositionPhase
+    transform.DecompositionPhase,
+    transform.UnrollPhase
   )
 
   // all available options from all phases
@@ -163,30 +172,42 @@ object Main {
     processOptions(args.toList) match {
       case Some(new_ctx) =>
         ctx = new_ctx
-        ctx.timers.total.start
+        ctx.timers.total.start()
         val pipeline = computePipeline(ctx)
         ctx.reporter.info("\n************ Starting Daisy ************")
         try { // for debugging it's better to have these off.
           pipeline.run(ctx, Program(null, Nil))
         } catch {
-          case tools.DivisionByZeroException(msg) =>
-            ctx.reporter.warning(msg)
-          case tools.DenormalRangeException(msg) =>
-            ctx.reporter.warning(msg)
-          case tools.OverflowException(msg) =>
-            ctx.reporter.warning(msg)
-          case e: java.lang.UnsatisfiedLinkError =>
-            ctx.reporter.warning("A library could not be loaded: " + e)
-          case tools.NegativeSqrtException(msg) =>
-            ctx.reporter.warning(msg)
-          case tools.ArcOutOfBoundsException(msg) =>
-            ctx.reporter.warning(msg)
-          case e: DaisyFatalError =>
-            ctx.reporter.info("Something really bad happened. Cannot continue.")
-          case _ : Throwable =>
-            ctx.reporter.info("Something really bad happened. Cannot continue.")
+          //case tools.DivisionByZeroException(msg) =>
+          //  ctx.reporter.warning(msg)
+          //case tools.DenormalRangeException(msg) =>
+          //  ctx.reporter.warning(msg)
+          //case tools.OverflowException(msg) =>
+          //  ctx.reporter.warning(msg)
+          //case e: java.lang.UnsatisfiedLinkError =>
+          //  ctx.reporter.warning("A library could not be loaded: " + e)
+          //case tools.NegativeSqrtException(msg) =>
+          //  ctx.reporter.warning(msg)
+          //case tools.ArcOutOfBoundsException(msg) =>
+          //  ctx.reporter.warning(msg)
+          // case e: DaisyFatalError =>
+          //   ctx.reporter.info(f"Something really bad happened. Cannot continue.")
+          case e: Exception =>
+            val msg = f"${e.getClass.getSimpleName}: ${e.getMessage}"
+            ctx.reporter.info(f"Something really bad happened. Cannot continue: $msg")
+            if ((ctx.options.contains("ds") || ctx.options.contains("ds-naive")) && ctx.options.contains("results-csv")) {
+              val (_,prg) = frontend.ExtractionPhase.runPhase(ctx, ctx.originalProgram)
+              backend.InfoPhase.runPhase(ctx.copy(errMsg = Some(msg)), prg)
+            }
+          case t : Throwable =>
+            val msg = f"${t.getClass.getSimpleName}: ${t.getMessage}"
+            ctx.reporter.info(f"Something really bad happened. Cannot continue: $msg")
+            if ((ctx.options.contains("ds") || ctx.options.contains("ds-naive")) && ctx.options.contains("results-csv")) {
+              val (_,prg) = frontend.ExtractionPhase.runPhase(ctx, ctx.originalProgram)
+              backend.InfoPhase.runPhase(ctx.copy(errMsg = Some(msg)), prg)
+            }
         }
-        ctx.timers.get("total").stop
+        ctx.timers.get("total").stop()
         ctx.reporter.info("time: \n" + ctx.timers.toString)
         Option(ctx)
       case None =>
@@ -201,9 +222,33 @@ object Main {
 
   private def computePipeline(ctx: Context): Pipeline[Program, Program] = {
 
-    var pipeline: Pipeline[Program, Program] = frontend.ExtractionPhase
+    var pipeline: Pipeline[Program, Program] =
+      if (ctx.lang == ProgramLanguage.ScalaProgram) frontend.ExtractionPhase else frontend.CExtractionPhase
+
+    if (ctx.hasFlag("ds-pre-c") || ctx.hasFlag("ds-pre-scala")) {
+      pipeline >>= analysis.SpecsProcessingPhase
+      pipeline >>= backend.InfoPhase
+      return pipeline
+    }
+    if (ctx.hasFlag("print-ast")) {
+      if (ctx.hasFlag("unroll")) {
+        pipeline >>= analysis.SpecsProcessingPhase
+        pipeline >>= transform.UnrollPhase
+        //pipeline >>= analysis.DataflowPhase
+        //pipeline >>= backend.CodeGenerationPhase
+      }
+      pipeline >>= backend.InfoPhase
+      return pipeline
+    }
 
     pipeline >>= analysis.SpecsProcessingPhase
+    if (ctx.hasFlag("unroll")) {
+      pipeline >>= transform.UnrollPhase
+      if (ctx.hasFlag("codegen")) {
+        pipeline >>= backend.CodeGenerationPhase
+        return pipeline
+      }
+    }
 
     if (ctx.hasFlag("rewrite")) {
       pipeline >>= opt.RewritingOptimizationPhase
@@ -219,16 +264,6 @@ object Main {
       pipeline >>= analysis.DynamicPhase
       pipeline >>= backend.InfoPhase
 
-    } else if(ctx.hasFlag("bgrtdynamic")){
-      pipeline >>= analysis.BGRTDynamicPhase
-      pipeline >>= backend.InfoPhase
-
-    } else if (ctx.hasFlag("rewrite-fitness-eval")) {
-      pipeline >>= experiment.RewritingFitnessEvaluation
-
-    // } else if (ctx.hasFlag("rewrite-stability-experiment")) {
-    //   pipeline >>= experiment.RewritingStabilityExperiment
-
     } else if (ctx.hasFlag("mixed-cost-eval")) {
       pipeline >>= transform.TACTransformerPhase >>
         transform.ConstantTransformerPhase >>
@@ -238,8 +273,20 @@ object Main {
     } else if (ctx.hasFlag("mixed-exp-gen")) {
       pipeline >>= experiment.MixedPrecisionExperimentGenerationPhase
 
-    } else if (ctx.hasFlag("comp-opts-exp-gen")) {
-      pipeline >>= experiment.CompilerOptimizationsExperimentGenerationPhase
+    } else if (ctx.hasFlag("approx")) {
+      pipeline >>= transform.TACTransformerPhase >>
+        transform.ConstantTransformerPhase
+
+      if (ctx.hasFlag("mixed-tuning")) {
+        pipeline >>= analysis.RangePhase >>
+          opt.MixedPrecisionOptimizationPhase
+      } else
+        pipeline >>= analysis.DataflowPhase
+
+      pipeline >>= opt.ApproxPhase >>
+        analysis.AbsErrorPhase >>
+        backend.InfoPhase >>
+        backend.CodeGenerationPhase
 
     } else if (ctx.hasFlag("metalibm") && ctx.hasFlag("mixed-tuning")){
       // for now will only consider depth = 0 and equal error distribution
@@ -251,16 +298,33 @@ object Main {
         opt.MetalibmPhase >>
         analysis.DataflowPhase >>     // TODO: AbsErrorPhase is enough?
         backend.InfoPhase >>
-        backend.CodeGenerationPhase 
+        backend.CodeGenerationPhase
 
     } else if (ctx.hasFlag("mixed-tuning")) {
+
+      val rangePhase = if (ctx.hasFlag("subdiv")) {
+        analysis.DataflowSubdivisionPhase
+      } else {
+        analysis.DataflowPhase
+      }
+
       pipeline >>= transform.TACTransformerPhase >>
         transform.ConstantTransformerPhase >>
-        analysis.RangePhase >>
-        opt.MixedPrecisionOptimizationPhase >>
-        analysis.AbsErrorPhase >>
-        backend.InfoPhase >>
-        backend.CodeGenerationPhase
+        rangePhase >>
+        opt.MixedPrecisionOptimizationPhase
+
+      ctx.option[Precision]("precision") match {
+        case FixedPrecision(_) =>
+          pipeline >>=
+            analysis.AbsErrorPhase >> // needed to get intermediate ranges for fixed-points
+            backend.InfoPhase >>
+            backend.CodeGenerationPhase
+
+        case _ =>
+          pipeline >>=
+            backend.InfoPhase >>
+            backend.CodeGenerationPhase
+      }
 
     } else if (ctx.hasFlag("metalibm")){
       pipeline >>= transform.DecompositionPhase >>
@@ -268,13 +332,27 @@ object Main {
         opt.MetalibmPhase >>
         analysis.DataflowPhase >>  // TODO: AbsErrorPhase is enough?
         backend.InfoPhase >>
-        backend.CodeGenerationPhase 
+        backend.CodeGenerationPhase
 
     } else if (ctx.hasFlag("probabilistic")) {
       pipeline >>= analysis.ProbabilisticBranchesPhase
 
     } else if (ctx.hasFlag("probabilisticError")) {
       pipeline >>= analysis.MPFRProbabilisticDataflowPhase
+    } else if (ctx.hasFlag("ds") && !ctx.hasFlag("unroll")) {
+      pipeline >>= analysis.DSAbstractionPhase
+      pipeline >>= backend.InfoPhase
+      //pipeline >>= transform.TACTransformerPhase
+      //pipeline >>= backend.CodeGenerationPhase
+      if (ctx.hasFlag("codegen")) {
+        pipeline >>= backend.CodeGenerationPhase
+      }
+    } else if (ctx.hasFlag("ds-naive")) {
+      pipeline >>= analysis.DSNaivePhase
+      pipeline >>= backend.InfoPhase
+      if (ctx.hasFlag("codegen")) {
+        pipeline >>= backend.CodeGenerationPhase
+      }
     } else {
       // Standard static analyses
       if (ctx.fixedPoint && ctx.hasFlag("apfixed")) {
@@ -293,15 +371,14 @@ object Main {
       }
 
       pipeline >>= backend.InfoPhase
-      
+
       if (ctx.hasFlag("codegen")) {
         pipeline >>= backend.CodeGenerationPhase
       }
     }
 
     if (ctx.hasFlag("benchmarking")) {
-      //pipeline >>= experiment.BenchmarkingPhase
-      pipeline >>= experiment.BenchmarkingRDTSCPhase
+      pipeline >>= experiment.BenchmarkingPhase
     }
 
     pipeline
@@ -319,7 +396,7 @@ object Main {
     for (c <- Main.allPhases.toSeq.sortBy(_.name) if c.definedOptions.nonEmpty) {
       reporter.info("")
       reporter.info(s"${c.name} Phase")
-      for(opt <- c.definedOptions.toSeq.sortBy(_.name)) {
+      for (opt <- c.definedOptions.toSeq.sortBy(_.name)) {
         reporter.info(opt.helpLine)
       }
     }
@@ -337,9 +414,9 @@ object Main {
 
     val argsMap: Map[String, String] =
       args.filter(_.startsWith("--")).map(_.drop(2).split("=", 2).toList match {
-      case List(name, value) => name -> value
-      case List(name) => name -> "yes"
-    }).toMap
+        case List(name, value) => name -> value
+        case List(name) => name -> "yes"
+      }).toMap
 
 
     argsMap.keySet.diff(allOptions.map(_.name)).foreach {
@@ -356,15 +433,15 @@ object Main {
         name -> argsMap.get(name).map(_.stripPrefix("[").stripPrefix("]").split(":").toList).getOrElse(Nil)
 
       case NumOption(name, default, _) => argsMap.get(name) match {
-          case None => name -> default
-          case Some(s) => try {
-            name -> s.toLong
-          } catch {
-            case e: NumberFormatException =>
-              initReporter.warning(s"Can't parse argument for option $name, using default")
-              name -> default
-          }
+        case None => name -> default
+        case Some(s) => try {
+          name -> s.toLong
+        } catch {
+          case e: NumberFormatException =>
+            initReporter.warning(s"Can't parse argument for option $name, using default")
+            name -> default
         }
+      }
 
         case DoubleOption(name, default, _) => argsMap.get(name) match {
           case None => name -> default
@@ -400,17 +477,25 @@ object Main {
       }
     }).toMap
 
-    val inputFile: String = args.filterNot(_.startsWith("-")) match {
+    def inputInfo: (String, ProgramLanguage.Value) = args.filterNot(_.startsWith("-")) match {
       case Seq() => initReporter.fatalError("No input file")
-      case Seq(f) if new File(f).exists => f
+      case Seq(f) if new File(f).exists && f.endsWith(".c") => (f, ProgramLanguage.CProgram)
+      case Seq(f) if new File(f).exists => (f, ProgramLanguage.ScalaProgram)
       case Seq(f) => initReporter.fatalError(s"File $f does not exist")
       case fs => initReporter.fatalError("More than one input file: " + fs.mkString(", "))
     }
 
+    val (inputFile, programLanguage) = inputInfo
     Option(Context(
       initReport = initReporter.report,
       file = inputFile,
+      lang = programLanguage,
       options = opts
     ))
   }
+
+  object ProgramLanguage extends Enumeration {
+    val CProgram, ScalaProgram = Value
+  }
+
 }

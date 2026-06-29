@@ -51,6 +51,7 @@ object Types {
   case object Int32Type extends TypeTree
   case object Int64Type extends TypeTree
   case object RealType extends TypeTree
+
   case class FinitePrecisionType(prec: Precision) extends TypeTree
 
   // arbitrary-precision fixed-point types for Vivado HLS
@@ -59,6 +60,15 @@ object Types {
   case class FunctionType(from: Seq[TypeTree], to: TypeTree) extends TypeTree
 
   case class TupleType(args: Seq[TypeTree]) extends TypeTree
+
+  case class VectorType(args: Seq[TypeTree]) extends TypeTree {
+    override def toString: String = s"List[${args.head.toString}]" // todo what about other args?
+    def elementType(): TypeTree = args.head.getType
+  }
+  case class MatrixType(args: Seq[TypeTree]) extends TypeTree {
+    override def toString: String = s"List[List[${args.head.toString}]]" // todo what about other args?
+    def elementType(): TypeTree = args.head.getType
+  }
 
   object NAryType {
     def unapply(t: TypeTree): Option[(Seq[TypeTree], Seq[TypeTree] => TypeTree)] = t match {

@@ -3,8 +3,6 @@
 package daisy
 package utils
 
-import scala.collection.immutable.Seq
-
 import lang.TreeOps
 import lang.Trees._
 import lang.Types._
@@ -143,14 +141,11 @@ class CPrinter(buffer: Appendable, ctx: Context) extends CodePrinter(buffer) {
         }
 
       case Cast(expr, t) =>
-        // TODO: check this
-        if (!(ctx.hasFlag("mixed-tuning") && ctx.fixedPoint)) {
-          sb.append("(")
-          pp(t,p)
-          sb.append(") (")
-          pp(expr,p)
-          sb.append(")")
-        }
+        sb.append("(")
+        pp(t,p)
+        sb.append(") (")
+        pp(expr,p)
+        sb.append(")")
 
       case FinitePrecisionType(Float16) => sb.append("half")
       case FinitePrecisionType(Float32) => sb.append("float")
@@ -186,6 +181,9 @@ class CPrinter(buffer: Appendable, ctx: Context) extends CodePrinter(buffer) {
         sb.append("#include <math.h>\n")
         if (ctx.hasFlag("apfixed") || (ctx.hasFlag("mixed-tuning") && ctx.fixedPoint)) {
           sb.append("#include <ap_fixed.h>\n")
+        } else if (ctx.hasFlag("metalibm")) {
+          sb.append("""#include "expansion.h"""")
+          sb.append("\n")
         }
 
         if (defs.flatMap(_.body).exists(
@@ -197,7 +195,7 @@ class CPrinter(buffer: Appendable, ctx: Context) extends CodePrinter(buffer) {
         }
 
         if (ctx.hasFlag("metalibm")) {
-          sb.append(ctx.wrapperFunctions.mkString("\n"))
+          sb.append(ctx.metalibmWrapperFunctions.mkString("\n"))
            // val prototypes = defs.map(fnc => getPrototypes(fnc.body.get).mkString("")).toList.mkString("")
            // sb.append(s"\n$prototypes")
         }

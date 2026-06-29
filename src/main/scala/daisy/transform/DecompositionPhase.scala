@@ -19,14 +19,13 @@ import lang.Identifiers._
  */
 object DecompositionPhase extends DaisyPhase {
 
-  override val name = "Expression decomposition for Metalibm"
-  override val shortName = "decomposition"
+  override val name = "Decomposition"
   override val description = "Expression decomposition for Metalibm"
   override val definedOptions: Set[CmdLineOption[Any]] = Set(
     NumOption("depth", 0, "depth of decomposed trees")
   )
 
-  implicit val debugSection = DebugSectionOptimisation
+  override implicit val debugSection = DebugSectionTransform
 
   var reporter: Reporter = null
 
@@ -43,7 +42,6 @@ object DecompositionPhase extends DaisyPhase {
 
       fnc.copy(body = Some(newBody))
     }
-
     (ctx.copy(originalFunctions = prg.defs.map(f => (f.id, f)).toMap),
       Program(prg.id, newDefs))
   }
@@ -108,7 +106,8 @@ object DecompositionPhase extends DaisyPhase {
   // TODO: duplicate functions from MetalibmPhase, cleanup
   def containsElemFnc(e: Expr): Boolean = {
     lang.TreeOps.exists {
-      case Sin(_) | Cos(_) | Tan(_) | Exp(_) | Log(_) | Sqrt(_) => true
+      case Sin(_) | Cos(_) | Tan(_) | Exp(_) | Log(_) | Sqrt(_) |
+        Atan(_) | Asin(_) | Acos(_) => true
     }(e)
   }
 

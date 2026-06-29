@@ -5,9 +5,10 @@ package analysis
 
 import lang.Trees._
 import lang.Identifiers._
+import lang.Types.RealType
 import tools._
 import FinitePrecision._
-import lang.TreeOps.allVariablesOf
+import lang.TreeOps.allIDsOf
 
 /**
   Computes and stores intermediate ranges.
@@ -16,14 +17,13 @@ import lang.TreeOps.allVariablesOf
     - SpecsProcessingPhase
  */
 object DataflowPhase extends DaisyPhase with RoundoffEvaluators with IntervalSubdivision with opt.CostFunctions {
-  override val name = "Dataflow Error"
-  override val shortName = "analysis"
+  override val name = "Dataflow error"
   override val description = "Computes ranges and absolute errors via dataflow analysis"
 
   override val definedOptions: Set[CmdLineOption[Any]] = Set(
     StringChoiceOption(
       "errorMethod",
-      Set("affine", "interval"),
+      Set("affine", "interval", "intervalMPFR", "affineMPFR"),
       "affine",
       "Method for error analysis"),
     StringChoiceOption(
@@ -32,8 +32,7 @@ object DataflowPhase extends DaisyPhase with RoundoffEvaluators with IntervalSub
       "no",
       "choose the fixed/floating-point precision which satisfies error bound")
   )
-
-  implicit val debugSection = DebugSectionAnalysis
+  override implicit val debugSection = DebugSectionAnalysis
 
   var rangeMethod = ""
   var errorMethod = ""
@@ -54,15 +53,22 @@ object DataflowPhase extends DaisyPhase with RoundoffEvaluators with IntervalSub
 
     var uniformPrecisions = Map[Identifier, Precision]()
 
+    val fncsToConsider = if (ctx.hasFlag("approx")) functionsToConsider(ctx, prg).filter(_.returnType == RealType)
+      else functionsToConsider(ctx, prg)
+
     // returns (abs error, result range, interm. errors, interm. ranges)
-    val res: Map[Identifier, (Rational, Interval, Map[(Expr, PathCond), Rational], Map[(Expr, PathCond), Interval])] =
-      analyzeConsideredFunctions(ctx, prg){ fnc =>
+    val res: Map[Identifier, (Rational, Interval, Map[(Expr, PathCond), Rational], Map[(Expr, PathCond), Interval], Map[Identifier, Precision])] =
+      fncsToConsider.map({ fnc =>
 
       val inputValMap: Map[Identifier, Interval] = ctx.specInputRanges(fnc.id)
 
       val fncBody = fnc.body.get
 
-      if (choosePrecision != "no") {
+      if (choosePrecision != "no" && !ctx.specResultErrorBounds.contains(fnc.id)) {
+        reporter.warning(s"Function ${fnc.id} does not have target error bound, cannot choose precision.")
+      }
+
+      if (choosePrecision != "no" && ctx.specResultErrorBounds.contains(fnc.id)) {
         reporter.info("analyzing fnc: " + fnc.id)
 
         // the max tolerated error
@@ -88,16 +94,17 @@ object DataflowPhase extends DaisyPhase with RoundoffEvaluators with IntervalSub
         // find precision which is sufficient
         availablePrecisions.find( prec => {
           try {
-            reporter.info(s"trying precision $prec")
+            reporter.debug(s"trying precision $prec")
             val allIDs = fnc.params.map(_.id)
             val inputErrorMap = allIDs.map(id => (id -> prec.absRoundoff(inputValMap(id)))).toMap
-            val precisionMap: Map[Identifier, Precision] = allVariablesOf(fnc.body.get).map(id => (id -> prec)).toMap
+            val precisionMap: Map[Identifier, Precision] = allIDsOf(fnc.body.get).map(id => (id -> prec)).toMap
 
-            res = computeRoundoff(inputValMap, inputErrorMap, precisionMap, fncBody, prec, fnc.precondition.get)
+            res = computeRoundoff(inputValMap, inputErrorMap, precisionMap, fncBody,
+              prec, fnc.precondition.get) // replaced ctx.specAdditionalConstraints(fnc.id)
 
             res._1 <= targetError
           } catch {
-            case OverflowException(_) => false
+            case OverflowException(_) | DivisionByZeroException(_) => false // div by zero can disappear with higher precisions
           }
         }) match {
 
@@ -110,7 +117,9 @@ object DataflowPhase extends DaisyPhase with RoundoffEvaluators with IntervalSub
           case Some(prec) =>
             uniformPrecisions = uniformPrecisions + (fnc.id -> prec)
         }
-        res
+        val result: (Rational, Interval, Map[(Expr, PathCond), Rational], Map[(Expr, PathCond), Interval], Map[Identifier, Precision]) =
+          (res._1, res._2, res._3, res._4, allIDsOf(fnc.body.get).map(id => (id -> uniformPrecisions(fnc.id))).toMap)
+        (fnc.id -> result)
 
       } else {
         ctx.reporter.info("analyzing fnc: " + fnc.id)
@@ -120,21 +129,28 @@ object DataflowPhase extends DaisyPhase with RoundoffEvaluators with IntervalSub
         }
         val inputErrorMap: Map[Identifier, Rational] = ctx.specInputErrors(fnc.id)
 
-        val precisionMap: Map[Identifier, Precision] = ctx.specInputPrecisions(fnc.id)
+        // add variables from let statements that do not have any explicit type assignment
+        val precisionMap: Map[Identifier, Precision] = ctx.specInputPrecisions(fnc.id) ++
+          allIDsOf(fnc.body.get).diff(ctx.specInputPrecisions(fnc.id).keySet).map(id => (id -> uniformPrecision)).toMap
         uniformPrecisions = uniformPrecisions + (fnc.id -> uniformPrecision) // so that this info is available in codegen
 
-        val precond = fnc.precondition.get
-
-        computeRoundoff(inputValMap, inputErrorMap, precisionMap, fncBody,
+        val precond = fnc.precondition.get // replaced ctx.specAdditionalConstraints(fnc.id)
+        val res = computeRoundoff(inputValMap, inputErrorMap, precisionMap, fncBody,
           uniformPrecision, precond)
+        val result: (Rational, Interval, Map[(Expr, PathCond), Rational], Map[(Expr, PathCond), Interval], Map[Identifier, Precision]) = (res._1, res._2, res._3, res._4, precisionMap)
+        (fnc.id -> result)
       }
-    }
+    }).toMap
 
-    (ctx.copy(uniformPrecisions = uniformPrecisions,
-      resultAbsoluteErrors = res.mapValues(_._1),
-      resultRealRanges = res.mapValues(_._2),
-      intermediateAbsErrors = res.mapValues(_._3),
-      intermediateRanges = res.mapValues(_._4)), prg)
+    (ctx.copy(specInputPrecisions = ctx.specInputPrecisions ++ res.mapValues(_._5).toMap,
+      uniformPrecisions = ctx.uniformPrecisions ++ uniformPrecisions,
+      resultAbsoluteErrors = ctx.resultAbsoluteErrors ++ res.mapValues(_._1).toMap,
+      resultRealRanges = ctx.resultRealRanges ++ res.mapValues(_._2).toMap,
+      intermediateAbsErrors = ctx.intermediateAbsErrors ++ res.mapValues(_._3).toMap,
+      intermediateRanges = ctx.intermediateRanges ++ res.mapValues(_._4).toMap,
+      assignedPrecisions = ctx.assignedPrecisions ++ uniformPrecisions.map({case (fncid, prec) => fncid -> Map[Identifier, Precision]().withDefaultValue(prec)})
+    ), prg)
+
   }
 
   def computeRange(inputValMap: Map[Identifier, Interval], expr: Expr, precond: Expr):
@@ -146,15 +162,25 @@ object DataflowPhase extends DaisyPhase with RoundoffEvaluators with IntervalSub
 
       case "affine" =>
         val (rng, intrmdRange) = evalRange[AffineForm](expr,
-          inputValMap.mapValues(AffineForm(_)), AffineForm.apply)
-        (rng.toInterval, intrmdRange.mapValues(_.toInterval))
+          inputValMap.mapValues(AffineForm(_)).toMap, AffineForm.apply)
+        (rng.toInterval, intrmdRange.mapValues(_.toInterval).toMap)
 
       case "smt" =>
         // SMT can take into account additional constraints
         val (rng, intrmdRange) = evalRange[SMTRange](expr,
           inputValMap.map({ case (id, int) => (id -> SMTRange(Variable(id), int, precond)) }),
           SMTRange.apply(_, precond))
-        (rng.toInterval, intrmdRange.mapValues(_.toInterval))
+        (rng.toInterval, intrmdRange.mapValues(_.toInterval).toMap)
+
+      case "intervalMPFR" =>
+        val (rng, intrmdRange) = evalRange[MPFRInterval](expr,
+          inputValMap.mapValues(MPFRInterval(_)).toMap, MPFRInterval.apply)
+        (rng.toInterval, intrmdRange.mapValues(_.toInterval).toMap)
+
+      case "affineMPFR" =>
+        val (rng, intrmdRange) = evalRange[MPFRAffineForm](expr,
+          inputValMap.mapValues(MPFRAffineForm(_)).toMap, MPFRAffineForm.apply)
+        (rng.toInterval, intrmdRange.mapValues(_.toInterval).toMap)
     }
   }
 
@@ -166,27 +192,53 @@ object DataflowPhase extends DaisyPhase with RoundoffEvaluators with IntervalSub
       case "interval" =>
         val (resRoundoff, allErrors) = evalRoundoff[Interval](expr, intermediateRanges,
           precisionMap,
-          inputErrorMap.mapValues(Interval.+/-),
+          inputErrorMap.mapValues(Interval.+/-).toMap,
           zeroError = Interval.zero,
           fromError = Interval.+/-,
           interval2T = Interval.apply,
           constantsPrecision = constPrecision,
           trackRoundoffErrs)
 
-        (Interval.maxAbs(resRoundoff.toInterval), allErrors.mapValues(Interval.maxAbs))
+        (Interval.maxAbs(resRoundoff.toInterval), allErrors.mapValues(Interval.maxAbs).toMap)
 
       case "affine" =>
 
         val (resRoundoff, allErrors) = evalRoundoff[AffineForm](expr, intermediateRanges,
           precisionMap,
-          inputErrorMap.mapValues(AffineForm.+/-),
+          inputErrorMap.mapValues(AffineForm.+/-).toMap,
           zeroError = AffineForm.zero,
           fromError = AffineForm.+/-,
           interval2T = AffineForm.apply,
           constantsPrecision = constPrecision,
           trackRoundoffErrs)
 
-        (Interval.maxAbs(resRoundoff.toInterval), allErrors.mapValues(e => Interval.maxAbs(e.toInterval)))
+        (Interval.maxAbs(resRoundoff.toInterval), allErrors.mapValues(e => Interval.maxAbs(e.toInterval)).toMap)
+
+      case "intervalMPFR" =>
+
+        val (resRoundoff, allErrors) = evalRoundoff[MPFRInterval](expr, intermediateRanges,
+          precisionMap,
+          inputErrorMap.mapValues(MPFRInterval.+/-).toMap,
+          zeroError = MPFRInterval.zero,
+          fromError = MPFRInterval.+/-,
+          interval2T = MPFRInterval.apply,
+          constantsPrecision = constPrecision,
+          trackRoundoffErrs)
+
+        (Interval.maxAbs(resRoundoff.toInterval), allErrors.mapValues(e => Interval.maxAbs(e.toInterval)).toMap)
+
+      case "affineMPFR" =>
+
+        val (resRoundoff, allErrors) = evalRoundoff[MPFRAffineForm](expr, intermediateRanges,
+          precisionMap,
+          inputErrorMap.mapValues(MPFRAffineForm.+/-).toMap,
+          zeroError = MPFRAffineForm.zero,
+          fromError = MPFRAffineForm.+/-,
+          interval2T = MPFRAffineForm.apply,
+          constantsPrecision = constPrecision,
+          trackRoundoffErrs)
+
+        (Interval.maxAbs(resRoundoff.toInterval), allErrors.mapValues(e => Interval.maxAbs(e.toInterval)).toMap)
     }
   }
 

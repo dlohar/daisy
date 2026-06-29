@@ -8,8 +8,9 @@ import utils.UniqueCounter
 
 import Rational.{zero => rzero, _}
 
-private[tools] case class Deviation(mgnt: Rational, index: Int) extends NoiseTerm[Deviation] {
-  def unary_-(): Deviation = Deviation(-mgnt, index)
+
+private[tools] case class Deviation(mgnt: Rational, index: Int) {
+  def unary_- = Deviation(-mgnt, index)
   def +(y: Deviation): Deviation = {
     assert(this.index == y.index)
     Deviation(this.mgnt + y.mgnt, index)
@@ -81,7 +82,7 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
 
   def addConstraint(e: Set[lang.Trees.Expr]): AffineForm = this
 
-  def unary_-(): AffineForm = AffineForm(-x0, noise.map(-_))
+  def unary_- = AffineForm(-x0, noise.map(-_))
 
   def +(y: AffineForm): AffineForm =
     AffineForm(this.x0 + y.x0, addQueues(this.noise, y.noise))
@@ -266,7 +267,7 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
 
   def arcsine: AffineForm = {
     val (a, b) = (toInterval.xlo, toInterval.xhi)
-    
+
     if (a < -one || b > one) {
       throw new ArcOutOfBoundsException("Trying to compute arcsine of: " + this)
     }
@@ -287,7 +288,7 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
 
   def arccosine: AffineForm = {
     val (a, b) = (toInterval.xlo, toInterval.xhi)
-    
+
     if (a < -one || b > one) {
       throw new ArcOutOfBoundsException("Trying to compute arccosine of: " + this)
     }
@@ -308,12 +309,17 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
 
   def arctangent: AffineForm = {
     val (a, b) = (toInterval.xlo, toInterval.xhi)
-    
-    // compute the max slope (derivative), will be one of the end points
-    // instead of trying to figure out which one, compute both
-    val slopeLo = abs(1 / (1 + a * a))
-    val slopeHi = abs(1 / (1 + b * b))
-    val alpha = max(slopeLo, slopeHi)
+
+    val alpha = if (a <= rzero && b >= rzero) {
+      // the largest slope is at zero and it is equal to 1
+      one
+    } else {
+      // compute the max slope (derivative), will be one of the end points
+      // instead of trying to figure out which one, compute both
+      val slopeLo = abs(1 / (1 + a * a))
+      val slopeHi = abs(1 / (1 + b * b))
+      max(slopeLo, slopeHi)
+    }
 
     val dmin = arctanDown(a) - (alpha * a)
     val dmax = arctanUp(b) - (alpha * b)
@@ -366,7 +372,62 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
 
   def detailString: String = x0.toDouble + " +/- " + radius.toDouble
 
-  private def multiplyLinearPart(a: Rational, xqueue: Seq[Deviation], b: Rational,
+
+  private def computeZeta(dmin: Rational, dmax: Rational): Rational = {
+    dmin / two +  dmax / two
+  }
+
+  private def computeDelta(zeta: Rational, dmin: Rational, dmax: Rational): Rational = {
+    max(zeta - dmin,  dmax - zeta)
+  }
+
+  // Int.MaxValue is necessary for correctness, as we compare indices
+  private val dummyDev = Deviation(rzero, Int.MaxValue)
+
+  private def sumAbsQueue(queue: Seq[Deviation]): Rational = {
+    var sum = rzero
+    val iter = queue.iterator
+    while(iter.hasNext) {
+      sum += Rational.abs(iter.next().mgnt)
+    }
+    sum
+  }
+
+  private def addQueues(xn: Seq[Deviation], yn: Seq[Deviation]): Seq[Deviation] = {
+    var deviation: Seq[Deviation] = Seq.empty
+    val iterX = xn.iterator
+    val iterY = yn.iterator
+
+    val fx = (xi: Deviation) => deviation :+= xi
+    val fy = (yi: Deviation) => deviation :+= yi
+
+    val fCouple = (xi: Deviation, yi: Deviation) => {
+      val zi =  xi + yi
+      if (!zi.isZero) deviation :+= zi
+    }
+    DoubleQueueIterator.iterate(iterX, iterY, dummyDev, fx, fy, fCouple)
+    assert(!iterX.hasNext && !iterY.hasNext)
+    deviation
+  }
+
+  private def subtractQueues(xn: Seq[Deviation], yn: Seq[Deviation]): Seq[Deviation] = {
+    var deviation: Seq[Deviation] = Seq.empty
+    val iterX = xn.iterator
+    val iterY = yn.iterator
+
+    val fx = (xi: Deviation) => deviation :+= xi
+    val fy = (yi: Deviation) => deviation :+= -yi
+
+    val fCouple = (xi: Deviation, yi: Deviation) => {
+      val zi =  xi - yi
+      if (!zi.isZero) deviation :+= zi
+    }
+    DoubleQueueIterator.iterate(iterX, iterY, dummyDev, fx, fy, fCouple)
+    assert(!iterX.hasNext && !iterY.hasNext)
+    deviation
+  }
+
+  private def multiplyQueuesAndMerge(a: Rational, xqueue: Seq[Deviation], b: Rational,
     yqueue: Seq[Deviation]): Seq[Deviation] = {
     var deviation = Seq[Deviation]()
     val iterX = xqueue.iterator
@@ -463,7 +524,7 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
     var deviation = Seq[Deviation]()
     val iter = queue.iterator
     while(iter.hasNext) {
-      val xi = iter.next
+      val xi = iter.next()
       val zi = xi * factor
       if (!zi.isZero) deviation :+= zi
     }
@@ -478,5 +539,51 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
 
     if (delta != rzero) deviation :+= Deviation(delta, AffineIndex.nextGlobal)
     AffineForm(z0, deviation)
+  }
+
+}
+
+
+// This is probably not the most efficient way, but it's tried and tested.
+object DoubleQueueIterator {
+
+  def iterate(iterX: Iterator[Deviation], iterY: Iterator[Deviation],
+    dummy: Deviation, fx: (Deviation) => Unit, fy: (Deviation) => Unit,
+    fCouple: (Deviation, Deviation) => Unit): Unit = {
+    var xi: Deviation = if (iterX.hasNext) iterX.next() else dummy
+    var yi: Deviation = if (iterY.hasNext) iterY.next() else dummy
+
+    var i = 0
+    while ((iterX.hasNext || iterY.hasNext)) {
+      i = i + 1
+      if(xi.index < yi.index) {
+        fx(xi)
+        xi = if (iterX.hasNext) iterX.next() else dummy
+      }
+      else if (yi.index < xi.index) {
+        fy(yi)
+        yi = if (iterY.hasNext) iterY.next() else dummy
+      }
+      else {
+        fCouple(xi, yi)
+        xi = if (iterX.hasNext) iterX.next() else dummy
+        yi = if (iterY.hasNext) iterY.next() else dummy
+      }
+    }
+    if (xi.index == yi.index) {
+      if (xi != dummy) {
+        fCouple(xi, yi)
+        xi = dummy
+        yi = dummy
+      }
+    }
+    else if (xi.index < yi.index) {
+      if (xi != dummy) {fx(xi); xi = dummy}
+      if (yi != dummy) {fy(yi); yi = dummy}
+    }
+    else if (yi.index < xi.index) {
+      if (yi != dummy) {fy(yi); yi = dummy}
+      if (xi != dummy) {fx(xi); xi = dummy}
+    }
   }
 }

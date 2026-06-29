@@ -5,7 +5,6 @@ package tools
 
 import scala.math.{ScalaNumber, ScalaNumericConversions}
 import java.math.BigInteger
-
 import scala.language.implicitConversions
 import Rational._
 
@@ -73,6 +72,8 @@ object Rational {
     val (n, d) = real2Fraction(s)
     Rational(n, d)
   }
+
+  def fromMPFR(m: MPFRFloat): Rational = fromString(m.toLongString)
 
   val zero = Rational(zeroBigInt, oneBigInt)
   val one = Rational(oneBigInt, oneBigInt)
@@ -431,6 +432,9 @@ object Rational {
     if (x >= y) x else y
   }
 
+  def max(seq: Seq[Rational]): Rational = seq.tail.foldLeft(seq.head)({case (acc, x) => max(acc,x)})
+  def min(seq: Seq[Rational]): Rational = seq.tail.foldLeft(seq.head)({case (acc, x) => min(acc,x)})
+
   def min(x: Rational, y: Rational): Rational = {
     if (x < y) x else y
   }
@@ -456,6 +460,9 @@ object Rational {
   private val mathContext = new java.math.MathContext(64, java.math.RoundingMode.HALF_EVEN)
   private val mathContextUp = new java.math.MathContext(64, java.math.RoundingMode.UP)
   private val mathContextDown = new java.math.MathContext(64, java.math.RoundingMode.DOWN)
+  private val mathContextMPFR = new java.math.MathContext(64, java.math.RoundingMode.HALF_EVEN)
+  private val mathContextMPFRCeiling = new java.math.MathContext(64, java.math.RoundingMode.CEILING)
+  private val mathContextMPFRFloor = new java.math.MathContext(64, java.math.RoundingMode.FLOOR)
 
   def niceDoubleString(d: Double): String = {
     // TODO: is there a library function maybe for this?
@@ -486,9 +493,11 @@ class Rational private(val n: BigInt, val d: BigInt) extends ScalaNumber with Sc
   with Ordered[Rational] {
 
   assert(d > 0, "Rational denominator negative! " + d)  // number can be negative only through nominator
-  assert(math.abs(gcd(n, d).toLong) == 1, "Rational not reduced %d / %d!".format(n, d))  // fraction is reduced
+  // The below assert can take a lot of time. Since the new Rationals are created very frequently,
+  // we have measured up to 1.8x performance increases by commenting the assert.
+  // assert(math.abs(gcd(n, d).toLong) == 1, "Rational not reduced %d / %d!".format(n, d))  // fraction is reduced
 
-  def unary_-(): Rational = Rational(-n, d)
+  def unary_- = Rational(-n, d)
   def +(other: Rational): Rational = {
     // This improves running time on really big testcases.  This new
     // implementation automatically computes + and - using the
@@ -535,6 +544,7 @@ class Rational private(val n: BigInt, val d: BigInt) extends ScalaNumber with Sc
   def toFractionString: String = "(%s)/(%s)".format(n.toString, d.toString)
 
   def integerPart: Int = doubleValue.toInt
+  def fractionPart: Rational = this - Rational(doubleValue().toInt)
   def longPart: Long = doubleValue.toLong
 
   def compare(other: Rational): Int = {
@@ -628,11 +638,12 @@ class Rational private(val n: BigInt, val d: BigInt) extends ScalaNumber with Sc
   }
 
   def toMPFRInterval: MPFRInterval = {
-    val bigN = new java.math.BigDecimal(n.bigInteger, mathContext)
-    val bigD = new java.math.BigDecimal(d.bigInteger, mathContext)
-    val resUp = bigN.divide(bigD, mathContextUp)
-    val resDown = bigN.divide(bigD, mathContextDown)
-    MPFRInterval(MPFRFloat.fromString(resDown.toString), MPFRFloat.fromString(resUp.toString))
+    // this will use 64 bits (as in the mathContext)
+    val bigN = new java.math.BigDecimal(n.bigInteger, mathContextMPFR)
+    val bigD = new java.math.BigDecimal(d.bigInteger, mathContextMPFR)
+    val resUp = bigN.divide(bigD, mathContextMPFRCeiling)
+    val resDown = bigN.divide(bigD, mathContextMPFRFloor)
+    MPFRInterval(MPFRFloat.fromStringDown(resDown.toString), MPFRFloat.fromStringUp(resUp.toString))
   }
 
   def toStringUp: String = {
@@ -652,7 +663,7 @@ class Rational private(val n: BigInt, val d: BigInt) extends ScalaNumber with Sc
   override def intValue(): Int = Predef.double2Double(doubleValue).intValue
   override def isValidByte: Boolean = false
   override def isValidChar: Boolean = false
-  override def isValidInt: Boolean = false
+  override def isValidInt: Boolean = false // todo return something else for ints?
   override def isValidShort: Boolean = false
   override def longValue(): Long = Predef.double2Double(doubleValue).longValue
   override def shortValue(): Short = Predef.double2Double(doubleValue).shortValue

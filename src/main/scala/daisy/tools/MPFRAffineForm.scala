@@ -5,11 +5,11 @@ package tools
 
 import scala.collection.immutable.Seq
 import utils.UniqueCounter
-import MPFRFloat.{zero => fzero,_}
+import MPFRFloat.{zero => fzero, _}
 import MPFRInterval.{zero => izero, _}
 
 private[tools] case class MPFRDeviation(mgnt: MPFRInterval, index: Int) {
-  def unary_-(): MPFRDeviation = MPFRDeviation(-mgnt, index)
+  def unary_- = MPFRDeviation(-mgnt, index)
   def +(y: MPFRDeviation): MPFRDeviation = {
     assert(this.index == y.index)
     MPFRDeviation(this.mgnt + y.mgnt, index)
@@ -59,20 +59,54 @@ object MPFRAffineForm {
   //   MPFRAffineForm(MPFRInterval(MPFRFloat.zero), Seq(MPFRDeviation(x, MPFRAffineIndex.nextGlobal)))
   // }
 
+  def apply(i: Interval): MPFRAffineForm = MPFRAffineForm(MPFRInterval(i))
+
   def +/-(x: MPFRFloat): MPFRAffineForm = {
     MPFRAffineForm(MPFRInterval(MPFRFloat.zero),
       Seq(MPFRDeviation(MPFRInterval(x), MPFRAffineIndex.nextGlobal)))
   }
 
+  def +/-(x: Rational): MPFRAffineForm = {
+    MPFRAffineForm(MPFRInterval(MPFRFloat.zero),
+      Seq(MPFRDeviation(MPFRInterval(x), MPFRAffineIndex.nextGlobal)))
+  }
+
   val zero: MPFRAffineForm = MPFRAffineForm(MPFRInterval.zero, Seq())
+
+  def newFormWithPacking(x0: MPFRInterval, noise: Seq[MPFRDeviation]): MPFRAffineForm = {
+    if ((noise.size) > 200) {
+      //println("packing!")
+      MPFRAffineForm(x0, packNoiseTerms(noise))
+    } else {
+      MPFRAffineForm(x0, noise)
+    }
+  }
+
+  private def packNoiseTerms(queue: Seq[MPFRDeviation]): Seq[MPFRDeviation] = {
+
+    // only need doubles here:
+    val mgnts: Seq[Double] = queue.map(x => maxAbs(x.mgnt).doubleValue)
+
+    val sum = mgnts.sum
+    val avrg = sum / mgnts.size
+
+    // compute std
+    val squaredDiff = mgnts.map(x => (x - avrg) * (x - avrg))
+    val stdDev = math.sqrt(squaredDiff.sum / mgnts.size)
+
+    // compact all deviations that are smaller than threshold
+    val threshold: MPFRFloat = MPFRFloat.fromString((avrg + stdDev).toString)
+    val (newQueue, tooSmallQueue) = queue.partition(x => maxAbs(x.mgnt) > threshold)
+    // need to sum up the *absolute* values for soundness
+    val newNoiseMgnt = tooSmallQueue.map(_.mgnt).foldLeft(MPFRInterval.zero)((acc, x) => acc + MPFRInterval(maxAbs(x)))
+
+    newQueue :+ MPFRDeviation(newNoiseMgnt, MPFRAffineIndex.nextGlobal)
+  }
 }
 
 
 case class MPFRAffineForm(x0: MPFRInterval, noise: Seq[MPFRDeviation]) extends RangeArithmetic[MPFRAffineForm]{
-
-  if (noise.size > 200) {
-    System.err.println("200 noise terms")
-  }
+  import MPFRAffineForm.newFormWithPacking
 
   lazy val radius: MPFRFloat = sumAbsQueue(noise)
   lazy val toMPFRInterval: MPFRInterval = {
@@ -98,13 +132,13 @@ case class MPFRAffineForm(x0: MPFRInterval, noise: Seq[MPFRDeviation]) extends R
 
   def addConstraint(e: Set[lang.Trees.Expr]): MPFRAffineForm = this
 
-  def unary_-(): MPFRAffineForm = MPFRAffineForm(-x0, noise.map(-_))
+  def unary_- = MPFRAffineForm(-x0, noise.map(-_))
 
   def +(y: MPFRAffineForm): MPFRAffineForm =
-    MPFRAffineForm(this.x0 + y.x0, addQueues(this.noise, y.noise))
+    newFormWithPacking(this.x0 + y.x0, addQueues(this.noise, y.noise))
 
   def -(y: MPFRAffineForm): MPFRAffineForm =
-    MPFRAffineForm(this.x0 - y.x0, subtractQueues(this.noise, y.noise))
+    newFormWithPacking(this.x0 - y.x0, subtractQueues(this.noise, y.noise))
 
   def *(y: MPFRAffineForm): MPFRAffineForm = {
     var z0 = this.x0 * y.x0
@@ -119,7 +153,7 @@ case class MPFRAffineForm(x0: MPFRInterval, noise: Seq[MPFRDeviation]) extends R
     if(delta != 0) {
       newTerms :+= MPFRDeviation(delta, MPFRAffineIndex.nextGlobal)
     }
-    MPFRAffineForm(z0, newTerms)
+    newFormWithPacking(z0, newTerms)
   }
 
   def *(r: MPFRFloat): MPFRAffineForm = {
@@ -286,9 +320,69 @@ case class MPFRAffineForm(x0: MPFRInterval, noise: Seq[MPFRDeviation]) extends R
     this.sine / this.cosine
   }
 
-  def arccosine: daisy.tools.MPFRAffineForm = ???
-  def arcsine: daisy.tools.MPFRAffineForm = ???
-  def arctangent: daisy.tools.MPFRAffineForm = ???
+  def arcsine: daisy.tools.MPFRAffineForm = {
+    val (a, b) = (toMPFRInterval.xlo, toMPFRInterval.xhi)
+
+    if (a < -one || b > one) {
+      throw new ArcOutOfBoundsException("Trying to compute arcsine of: " + this)
+    }
+
+    // compute the max slope (derivative), will be one of the end points
+    // instead of trying to figure out which one, compute both
+    val slopeLo = abs(one / sqrtDown(one - a * a))
+    val slopeHi = abs(one / sqrtDown(one - b * b))
+    val alpha = max(slopeLo, slopeHi)
+
+    val dmin = MPFRInterval(asinDown(a) - (alpha * a))
+    val dmax = MPFRInterval(asinUp(b) - (alpha * b))
+
+    val zeta = computeZeta(dmin, dmax)
+    val delta = computeDelta(zeta, dmin, dmax)
+    unaryOp(this.x0, this.noise, MPFRInterval(alpha), zeta, delta)
+  }
+
+  def arccosine: daisy.tools.MPFRAffineForm = {
+    val (a, b) = (toMPFRInterval.xlo, toMPFRInterval.xhi)
+
+    if (a < -one || b > one) {
+      throw new ArcOutOfBoundsException("Trying to compute arccosine of: " + this)
+    }
+
+    // compute the max slope (derivative), will be one of the end points
+    // instead of trying to figure out which one, compute both
+    val slopeLo = abs(-one / sqrtDown(one - a * a))
+    val slopeHi = abs(-one / sqrtDown(one - b * b))
+    val alpha = max(slopeLo, slopeHi)
+
+    val dmin = MPFRInterval(acosDown(a) - (alpha * a))
+    val dmax = MPFRInterval(acosUp(b) - (alpha * b))
+
+    val zeta = computeZeta(dmin, dmax)
+    val delta = computeDelta(zeta, dmin, dmax)
+    unaryOp(this.x0, this.noise, MPFRInterval(alpha), zeta, delta)
+  }
+
+  def arctangent: daisy.tools.MPFRAffineForm = {
+    val (a, b) = (toMPFRInterval.xlo, toMPFRInterval.xhi)
+
+    val alpha = if (a <= fzero && b >= fzero) {
+      // the largest slope is at zero and it is equal to 1
+      one
+    } else {
+      // compute the max slope (derivative), will be one of the end points
+      // instead of trying to figure out which one, compute both
+      val slopeLo = abs(one / (one + a * a))
+      val slopeHi = abs(one / (one + b * b))
+      max(slopeLo, slopeHi)
+    }
+
+    val dmin = MPFRInterval(atanDown(a) - (alpha * a))
+    val dmax = MPFRInterval(atanUp(b) - (alpha * b))
+
+    val zeta = computeZeta(dmin, dmax)
+    val delta = computeDelta(zeta, dmin, dmax)
+    unaryOp(this.x0, this.noise, MPFRInterval(alpha), zeta, delta)
+  }
 
   /** Min-range based linear approximation of the exp() function
    */
@@ -352,7 +446,7 @@ case class MPFRAffineForm(x0: MPFRInterval, noise: Seq[MPFRDeviation]) extends R
     var sum = fzero
     val iter = queue.iterator
     while(iter.hasNext) {
-      sum = sum up_+ MPFRInterval.maxAbs(iter.next.mgnt)
+      sum = sum up_+ MPFRInterval.maxAbs(iter.next().mgnt)
     }
     sum
   }
@@ -509,7 +603,7 @@ case class MPFRAffineForm(x0: MPFRInterval, noise: Seq[MPFRDeviation]) extends R
     var deviation = Seq[MPFRDeviation]()
     val iter = queue.iterator
     while(iter.hasNext) {
-      val xi = iter.next
+      val xi = iter.next()
       val zi = xi * factor
       if (!zi.isZero) deviation :+= zi
     }
@@ -525,6 +619,8 @@ case class MPFRAffineForm(x0: MPFRInterval, noise: Seq[MPFRDeviation]) extends R
     if (delta != izero) deviation :+= MPFRDeviation(delta, MPFRAffineIndex.nextGlobal)
     MPFRAffineForm(z0, deviation)
   }
+
+
 }
 
 
@@ -534,24 +630,24 @@ object MPFRDoubleQueueIterator {
   def iterate(iterX: Iterator[MPFRDeviation], iterY: Iterator[MPFRDeviation],
     dummy: MPFRDeviation, fx: (MPFRDeviation) => Unit, fy: (MPFRDeviation) => Unit,
     fCouple: (MPFRDeviation, MPFRDeviation) => Unit): Unit = {
-    var xi: MPFRDeviation = if (iterX.hasNext) iterX.next else dummy
-    var yi: MPFRDeviation = if (iterY.hasNext) iterY.next else dummy
+    var xi: MPFRDeviation = if (iterX.hasNext) iterX.next() else dummy
+    var yi: MPFRDeviation = if (iterY.hasNext) iterY.next() else dummy
 
     var i = 0
     while ((iterX.hasNext || iterY.hasNext)) {
       i = i + 1
       if(xi.index < yi.index) {
         fx(xi)
-        xi = if (iterX.hasNext) iterX.next else dummy
+        xi = if (iterX.hasNext) iterX.next() else dummy
       }
       else if (yi.index < xi.index) {
         fy(yi)
-        yi = if (iterY.hasNext) iterY.next else dummy
+        yi = if (iterY.hasNext) iterY.next() else dummy
       }
       else {
         fCouple(xi, yi)
-        xi = if (iterX.hasNext) iterX.next else dummy
-        yi = if (iterY.hasNext) iterY.next else dummy
+        xi = if (iterX.hasNext) iterX.next() else dummy
+        yi = if (iterY.hasNext) iterY.next() else dummy
       }
     }
     if (xi.index == yi.index) {

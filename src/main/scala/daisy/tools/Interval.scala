@@ -10,12 +10,13 @@ object Interval {
   def maxAbs(i: Interval): Rational = max(abs(i.xlo), abs(i.xhi))
 
   def minAbs(i: Interval): Rational = {
-    assert(!i.includes(Rational.zero))
+    assert(!i.includes(Rational.zero), s"Cannot compute minimum absolute value if the range contains zero: ${i}")
     min(abs(i.xlo), abs(i.xhi))
   }
 
   def apply(r: Rational): Interval = Interval(r, r)
   def apply(i: Interval): Interval = i
+  def fromMPFR(i: MPFRInterval): Interval = Interval(Rational.fromMPFR(i.xlo), Rational.fromMPFR(i.xhi))
 
   // for convenience of testing
   def apply(l: Int, h: Int): Interval =
@@ -24,10 +25,25 @@ object Interval {
   def +/-(r: Rational) = Interval(-r,r)
 
   val zero: Interval = Interval(0)
+  val empty: Option[Interval] = None
 
   // TODO good precision?
   val pi = Interval(Rational.fromString("3.141592653589793238"),
                     Rational.fromString("3.141592653589793239"))
+
+  def union(ints: Seq[Interval]): Interval = ints.tail.foldLeft(ints.head)({case (acc, x) => acc.union(x)})
+
+  /**
+   * Returns a set of integers that lay inside a rational interval
+   * @param x interval
+   * @return set of integers
+   */
+  def integersIn(x: Interval): Set[Int] = {
+    // if the bounds are integers, take their exact values, otherwise round outwards
+    val from = if (x.xlo.fractionPart == Rational.zero) x.xlo.integerPart else x.xlo.integerPart
+    val tto = if (x.xhi.fractionPart == Rational.zero) x.xhi.integerPart else x.xhi.integerPart + 1
+    Set.from(from to tto)
+  } // TODO rounding outwards correct? (should it be inwards?)
 }
 
 case class PartialInterval(xlo: Option[Rational], xhi: Option[Rational])
@@ -57,7 +73,7 @@ case class Interval(xlo: Rational, xhi: Rational) extends RangeArithmetic[Interv
 
   def addConstraint(e: Set[lang.Trees.Expr]): Interval = this
 
-  def unary_-(): Interval = Interval(-xhi, -xlo)
+  def unary_- = Interval(-xhi, -xlo)
 
   def +(other: Interval): Interval = {
     Interval(xlo + other.xlo, xhi + other.xhi)

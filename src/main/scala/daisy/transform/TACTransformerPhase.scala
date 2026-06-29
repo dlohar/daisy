@@ -4,10 +4,9 @@ package daisy
 package transform
 
 import scala.collection.immutable.Seq
-
 import lang.Trees._
 import lang.Identifiers._
-import lang.Types.RealType
+import lang.Types.{FinitePrecisionType, MatrixType, RealType, TypeTree, VectorType}
 import lang.Extractors._
 
 /**
@@ -22,20 +21,31 @@ import lang.Extractors._
     None
  */
 object TACTransformerPhase extends DaisyPhase {
-  override val name = "Three-address form transformer"
-  override val shortName = "tac"
-  override val description = "Transforms the function bodies into SSA form."
+  override val name = "TAC transformer"
+  override val description = "Three-address form transformers transforms the function bodies into SSA form."
+  override implicit val debugSection = DebugSectionTransform
 
   override def runPhase(ctx: Context, prg: Program): (Context, Program) = {
     // need to replace function bodies, create a copy of the whole program
-    val newDefs = transformConsideredFunctions(ctx, prg){ fnc => fnc.copy(body = Some(toSSA(fnc.body.get)))}
-    (ctx, Program(prg.id, newDefs))
+    val fncsToConsider = if (ctx.hasFlag("approx")) functionsToConsider(ctx, prg).filter(_.returnType == RealType)
+    else functionsToConsider(ctx, prg)
+    val newDefs = fncsToConsider.map(fnc => fnc.copy(body = Some(toSSA(fnc.body.get))))
+    (ctx, Program(prg.id, newDefs ++ functionsToConsider(ctx, prg).diff(fncsToConsider)))
   }
 
-  def fresh(): Identifier = FreshIdentifier("_tmp", RealType, true)
+  def freshLiteral(tp: TypeTree = RealType): Variable = {
+    val t1 = FreshIdentifier("_tmp", tp, true)
+    tp match {
+      case RealType => Variable(t1)
+      case FinitePrecisionType(_) => Variable(t1)
+      case VectorType(_) => VectorLiteral(t1)
+      case MatrixType(_) => MatrixLiteral(t1)
+    }
+  }
 
   def toSSA(e: Expr): Expr = e match {
     case t: Terminal => t
+    // todo debug TAC on DS
 
     case ArithOperator(Seq(t), recons) =>
       val tree = toSSA(t)
@@ -71,6 +81,8 @@ object TACTransformerPhase extends DaisyPhase {
     case x @ GreaterEquals(_, _) => x
     case x @ LessThan(_, _) => x
     case x @ LessEquals(_, _) => x
+
+    case x @ ApproxPoly(_, _, _, _) => x
   }
 
   private def replaceBody(expr: Expr, nextId: Identifier, nextBody: Expr): Expr = (expr: @unchecked) match {
@@ -84,23 +96,23 @@ object TACTransformerPhase extends DaisyPhase {
 
   def merge(lhs: Expr, rhs: Expr, recons: (Seq[Expr]) => Expr): Expr = (lhs, rhs) match {
     case (Let(id, v, b), _) if isSimpleExpr(b)=>
-      val t1 = fresh()
+      val lit = freshLiteral(b.getType)
       Let(id, v,
-        Let(t1, b, merge(Variable(t1), rhs, recons)))
+        Let(lit.id, b, merge(lit, rhs, recons)))
 
     case (Let(id, v, b), _) =>
       Let(id, v, merge(b, rhs, recons))
 
     case (p1, Let(id, v, b)) if (isSimpleExpr(p1)) =>
-      val t1 = fresh()
-      Let(t1, p1,
+      val lit = freshLiteral(p1.getType)
+      Let(lit.id, p1,
         Let(id, v,
-          merge(Variable(t1), b, recons)))
+          merge(lit, b, recons)))
 
     case (t: Terminal, Let(id, v, b)) if isSimpleExpr(b) =>
-      val t1 = fresh()
+      val lit = freshLiteral(b.getType)
       Let(id, v,
-        Let(t1, b, merge(t, Variable(t1), recons)))
+        Let(lit.id, b, merge(t, lit, recons)))
 
 
     case (t: Terminal, Let(id, v, b)) =>
@@ -111,18 +123,18 @@ object TACTransformerPhase extends DaisyPhase {
     case (t1: Terminal, t2: Terminal) => recons(Seq(t1, t2))
 
     case (v: Terminal, p) if isSimpleExpr(p) =>
-      val t1 = fresh()
-      Let(t1, p, recons(Seq(v, Variable(t1))))
+      val lit = freshLiteral(p.getType)
+      Let(lit.id, p, recons(Seq(v, lit)))
 
     case (p, v: Terminal) if isSimpleExpr(p) =>
-      val t1 = fresh()
-      Let(t1, p, recons(Seq(Variable(t1), v)))
+      val lit = freshLiteral(p.getType)
+      Let(lit.id, p, recons(Seq(lit, v)))
 
     case (p1, p2) if (isSimpleExpr(p1) && isSimpleExpr(p2))=>
-      val t1 = fresh()
-      val t2 = fresh()
-      Let(t1, p1,
-        Let(t2, p2, recons(Seq(Variable(t1), Variable(t2)))))
+      val t1 = freshLiteral(p1.getType)
+      val t2 = freshLiteral(p2.getType)
+      Let(t1.id, p1,
+        Let(t2.id, p2, recons(Seq(t1, t2))))
   }
 
 

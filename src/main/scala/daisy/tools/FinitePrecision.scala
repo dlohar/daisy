@@ -35,6 +35,9 @@ object FinitePrecision {
 
     override def compare(that: Precision): Int = (this,that) match {
       case (FloatPrecision(a), FloatPrecision(b)) => a - b
+      case (FloatPrecision(_), Int32) => 1 // todo check if this is ok. Maybe pull this comparison out somewhere else, need a cast?
+      case (Int32, FloatPrecision(_)) => -1 // todo does this ever happen
+      case (Int32, Int32) => 0
       case (FixedPrecision(a), FixedPrecision(b)) => a - b
         //if (a == b) 0 else throw new Exception("mixed-precision currently unsupported for fixed-points")
       case (FloatPrecision(_), FixedPrecision(_)) |
@@ -129,6 +132,7 @@ object FinitePrecision {
 
   case object Float64 extends FloatPrecision(64) with DenormalCheck {
 
+    override val toString = "Double"
     override val machineEpsilon: Rational = Rational.powerTwo(-53)
 
     override val (mantissa_bits, exponent_bits): (Int, Int) = (52, 11)
@@ -192,7 +196,7 @@ object FinitePrecision {
     override val toString = "Fixed" + bitlength
 
     override def _absRoundoff(i: Interval): Rational = Rational.powerTwo(-fractionalBits(i))
-    override def _absTranscendentalRoundoff(i: Interval): Rational = ???
+    override def _absTranscendentalRoundoff(i: Interval): Rational = Rational.two * _absRoundoff(i) // todo smarter computation // changed from: Rational.two *
 
     def fractionalBits(i: Interval): Int = fractionalBits(Interval.maxAbs(i))
     def fractionalBits(r: Rational): Int = bitlength - integerBitsNeeded(r)
@@ -203,5 +207,53 @@ object FinitePrecision {
 
     // TODO
     override def canRepresent(r: Rational) = false
+  }
+
+  case object Int32 extends Precision {
+    override val range: Interval = Interval.+/-(Int.MaxValue.toDouble)
+
+    // todo we don't actually need these methods. Is there a cleaner way to represent this?
+    override protected def _absRoundoff(i: Interval): Rational = ???
+
+    override protected def _absTranscendentalRoundoff(i: Interval): Rational = ???
+
+    override def canRepresent(r: Rational): Boolean = ???
+  }
+
+  case object VectorFloat64 extends FloatPrecision(64) with DenormalCheck {
+    override val toString = "List[Double]"
+
+    override val machineEpsilon: Rational = Rational.powerTwo(-53)
+
+    override val (mantissa_bits, exponent_bits): (Int, Int) = (52, 11)
+
+    override val range: Interval = Interval.+/-(Double.MaxValue)
+
+    override val minNormal: Rational = java.lang.Double.MIN_NORMAL
+
+    override val denormalsError: Rational = Rational.powerTwo(-1075)
+
+    override def _absRoundoff(i: Interval): Rational =
+      Rational.fromDouble(math.ulp(Math.nextUp(Interval.maxAbs(i).doubleValue))) / Rational(2)
+
+  }
+
+  case object MatrixFloat64 extends FloatPrecision(64) with DenormalCheck {
+
+    override val toString = "List[List[Double]]"
+
+    override val machineEpsilon: Rational = Rational.powerTwo(-53)
+
+    override val (mantissa_bits, exponent_bits): (Int, Int) = (52, 11)
+
+    override val range: Interval = Interval.+/-(Double.MaxValue)
+
+    override val minNormal: Rational = java.lang.Double.MIN_NORMAL
+
+    override val denormalsError: Rational = Rational.powerTwo(-1075)
+
+    override def _absRoundoff(i: Interval): Rational =
+      Rational.fromDouble(math.ulp(Math.nextUp(Interval.maxAbs(i).doubleValue))) / Rational(2)
+
   }
 }
