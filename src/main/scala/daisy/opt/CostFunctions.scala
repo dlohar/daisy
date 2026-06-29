@@ -1036,5 +1036,195 @@ trait CostFunctions {
     areaBasedCostFunction(expr, typeConfig) + mlRegressionCostFunction(originalTree, expr, typeConfig)*Rational(10000)
   }
 
+  // Adding the new cost function for printing the floating-point simple cost for precision map
+def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identifier, Precision], defaultPrecision: Precision): Rational = {
+
+    // from -> to
+    def castCost(from: Precision, to: Precision) = ((from, to): @unchecked) match {
+      case (Float32, Float32)           => zero
+      case (Float32, Float64)           => zero
+      case (Float32, DoubleDouble)      => Rational.fromReal(2.1643)
+      case (Float64, Float32)           => Rational.fromReal(1.3357)
+      case (Float64, Float64)           => zero
+      case (Float64, DoubleDouble)      => Rational.fromReal(2.21)
+      case (DoubleDouble, Float32)      => Rational.fromReal(1.4814)
+      case (DoubleDouble, Float64)      => Rational.fromReal(1.6971)
+      case (DoubleDouble, DoubleDouble) => zero
+    }
+
+    def plusCost(prec: Precision) = (prec: @unchecked) match {
+      case Float32      => Rational.fromReal(1.6114)
+      case Float64      => Rational.fromReal(1.7357)
+      case DoubleDouble => Rational.fromReal(2.3343)
+    }
+
+    def minusCost(prec: Precision) = (prec: @unchecked) match {
+      case Float32      => Rational.fromReal(1.8829)
+      case Float64      => Rational.fromReal(2.1457)
+      case DoubleDouble => Rational.fromReal(2.3229)
+    }
+
+    def timesCost(prec: Precision) = (prec: @unchecked) match {
+      case Float32      => Rational.fromReal(1.8029)
+      case Float64      => Rational.fromReal(1.81)
+      case DoubleDouble => Rational.fromReal(2.1986)
+    }
+
+    def divCost(prec: Precision) = (prec: @unchecked) match {
+      case Float32      => Rational.fromReal(1.7657)
+      case Float64      => Rational.fromReal(1.95)
+      case DoubleDouble => Rational.fromReal(3.2657)
+    }
+
+    def uminusCost(prec: Precision) = (prec: @unchecked) match {
+      case Float32      => Rational.fromReal(1.1714)
+      case Float64      => Rational.fromReal(1.1129)
+      case DoubleDouble => Rational.fromReal(1.7086)
+    }
+
+    def sqrtCost(prec: Precision) = (prec: @unchecked) match {
+      case Float64      => Rational.fromReal(1.6171)
+      case DoubleDouble => Rational.fromReal(6.3686)
+    }
+
+    def transCost(prec: Precision) = (prec: @unchecked) match {
+      case Float32      => Rational.fromReal(10.0)
+      case Float64      => Rational.fromReal(11.0)
+      case DoubleDouble => Rational.fromReal(20.0)
+    }
+
+    def eval(e: Expr): Rational = (e: @unchecked) match {
+
+      // constant declarations
+      case Let(id, RealLiteral(_), body) =>
+        eval(body)
+
+      case Let(id, Variable(_), body) =>
+        eval(body)
+
+      // both operands are literals
+      case Let(id, ArithOperator(Seq(RealLiteral(_), RealLiteral(_)), recons), body) =>
+        eval(body)
+
+      // left is literal, right is variable
+      case Let(id, ArithOperator(Seq(RealLiteral(_), z @ Variable(r)), recons), body) =>
+        val rPrec  = typeConfig(r)
+        val idPrec = typeConfig(id)
+        val opPrec = getUpperBound(getUpperBound(rPrec, defaultPrecision), idPrec)
+        val opCost = (recons(Seq(z, z)): @unchecked) match {
+          case _: Plus     => plusCost(opPrec)
+          case _: Minus    => minusCost(opPrec)
+          case _: Times    => timesCost(opPrec)
+          case _: Division => divCost(opPrec)
+        }
+        var castCosts = zero
+        if (defaultPrecision != opPrec) castCosts = castCosts + castCost(defaultPrecision, opPrec)
+        if (rPrec != opPrec)            castCosts = castCosts + castCost(rPrec, opPrec)
+        if (idPrec < opPrec)            castCosts = castCosts + castCost(opPrec, idPrec)
+        (opCost + castCosts + eval(body))
+
+      // left is variable, right is literal
+      case Let(id, ArithOperator(Seq(y @ Variable(l), RealLiteral(_)), recons), body) =>
+        val lPrec  = typeConfig(l)
+        val idPrec = typeConfig(id)
+        val opPrec = getUpperBound(getUpperBound(lPrec, defaultPrecision), idPrec)
+        val opCost = (recons(Seq(y, y)): @unchecked) match {
+          case _: Plus     => plusCost(opPrec)
+          case _: Minus    => minusCost(opPrec)
+          case _: Times    => timesCost(opPrec)
+          case _: Division => divCost(opPrec)
+        }
+        var castCosts = zero
+        if (lPrec != opPrec)            castCosts = castCosts + castCost(lPrec, opPrec)
+        if (defaultPrecision != opPrec) castCosts = castCosts + castCost(defaultPrecision, opPrec)
+        if (idPrec < opPrec)            castCosts = castCosts + castCost(opPrec, idPrec)
+        (opCost + castCosts + eval(body))
+
+      case Let(id, UMinus(Variable(t)), body) =>
+        val tPrec  = typeConfig(t)
+        val idPrec = typeConfig(id)
+        val opCost = uminusCost(tPrec)
+        val castCosts = if (idPrec < tPrec) castCost(tPrec, idPrec) else zero
+        (opCost + castCosts + eval(body))
+
+      case Let(id, Sqrt(Variable(t)), body) =>
+        val tPrec  = typeConfig(t)
+        val idPrec = typeConfig(id)
+        val opCost = sqrtCost(tPrec)
+        val castCosts = if (idPrec < tPrec) castCost(tPrec, idPrec) else zero
+        (opCost + castCosts + eval(body))
+
+      case Let(id, ArithOperator(Seq(y @ Variable(l), z @ Variable(r)), recons), body) =>
+        val lPrec  = typeConfig(l)
+        val rPrec  = typeConfig(r)
+        val idPrec = typeConfig(id)
+        val opPrec = getUpperBound(getUpperBound(lPrec, rPrec), idPrec)
+        val opCost = (recons(Seq(y, z)): @unchecked) match {
+          case _: Plus     => plusCost(opPrec)
+          case _: Minus    => minusCost(opPrec)
+          case _: Times    => timesCost(opPrec)
+          case _: Division => divCost(opPrec)
+        }
+        var castCosts = zero
+        if (lPrec != opPrec)  castCosts = castCosts + castCost(lPrec, opPrec)
+        if (rPrec != opPrec)  castCosts = castCosts + castCost(rPrec, opPrec)
+        if (idPrec < opPrec)  castCosts = castCosts + castCost(opPrec, idPrec)
+        (opCost + castCosts + eval(body))
+
+      case Let(id, ArithOperator(Seq(y @ Variable(t)), recons), body) =>
+        val tPrec  = typeConfig(t)
+        val idPrec = typeConfig(id)
+        val opCost = transCost(tPrec)
+        val castCosts = if (idPrec < tPrec) castCost(tPrec, idPrec) else zero
+        (opCost + castCosts + eval(body))
+
+      // non-Let cases
+      case ArithOperator(Seq(RealLiteral(_), z @ Variable(r)), recons) =>
+        val rPrec  = typeConfig(r)
+        val opPrec = getUpperBound(rPrec, defaultPrecision)
+        (recons(Seq(z, z)): @unchecked) match {
+          case _: Plus     => plusCost(opPrec)
+          case _: Minus    => minusCost(opPrec)
+          case _: Times    => timesCost(opPrec)
+          case _: Division => divCost(opPrec)
+        }
+
+      case ArithOperator(Seq(y @ Variable(l), RealLiteral(_)), recons) =>
+        val lPrec  = typeConfig(l)
+        val opPrec = getUpperBound(lPrec, defaultPrecision)
+        (recons(Seq(y, y)): @unchecked) match {
+          case _: Plus     => plusCost(opPrec)
+          case _: Minus    => minusCost(opPrec)
+          case _: Times    => timesCost(opPrec)
+          case _: Division => divCost(opPrec)
+        }
+
+      case ArithOperator(Seq(y @ Variable(l), z @ Variable(r)), recons) =>
+        val lPrec  = typeConfig(l)
+        val rPrec  = typeConfig(r)
+        val opPrec = getUpperBound(lPrec, rPrec)
+        val opCost = (recons(Seq(y, z)): @unchecked) match {
+          case _: Plus     => plusCost(opPrec)
+          case _: Minus    => minusCost(opPrec)
+          case _: Times    => timesCost(opPrec)
+          case _: Division => divCost(opPrec)
+        }
+        var castCosts = zero
+        if (lPrec != opPrec) castCosts = castCosts + castCost(lPrec, opPrec)
+        if (rPrec != opPrec) castCosts = castCosts + castCost(rPrec, opPrec)
+        (opCost + castCosts)
+
+      case Variable(_) => zero
+
+      case UMinus(Variable(t)) =>
+        uminusCost(typeConfig(t))
+
+      case Sqrt(Variable(t)) =>
+        sqrtCost(typeConfig(t))
+
+    }
+    eval(expr)
+  }
+
 
 }

@@ -1,0 +1,8 @@
+func = {
+  x: Float32
+  y: Float32
+  t1: Float32
+  t2: Float32
+  t3: Float32
+  result: Float32
+}

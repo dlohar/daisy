@@ -13,6 +13,7 @@ import daisy.Main.ProgramLanguage
 import daisy.lang.Identifiers.FreshIdentifier
 import daisy.lang.TreeOps
 import daisy.lang.Types.{MatrixType, RealType, VectorType}
+import daisy.tools.FinitePrecision.Precision
 
 /**
   ??? Description goes here
@@ -104,6 +105,17 @@ object InfoPhase extends DaisyPhase with opt.CostFunctions {
           range.foreach(r => ctx.reporter.result(s"  Real range:     $r"))
 
           relError.foreach(re => ctx.reporter.result(s"  Relative error: $re"))
+        
+          if (ctx.option[Option[String]]("mixed-precision").isDefined) {
+            ctx.specInputPrecisions.get(fnc.id) match {
+              case Some(typeConfig) if typeConfig.nonEmpty =>
+                val defaultPrecision = ctx.option[Precision]("precision")
+                val cost = benchmarkedMixedPrecisionCostWithDefault(fnc.body.get, typeConfig, defaultPrecision)
+                ctx.reporter.result(s"  Precision assignment cost: $cost")
+              case _ =>
+            }
+          }
+
 
           if (ctx.hasFlag("approx") && !TreeOps.containsApproxNode(fnc.body.get)) {
             val numOps = countOps(fnc.body.get)
