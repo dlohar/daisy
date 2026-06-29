@@ -27,9 +27,6 @@ case class Context(
   libFiles: List[String] = List(System.getProperty("user.dir")+"/library/Real.scala",
     System.getProperty("user.dir")+"/library/Vector.scala"),
 
-  // needed to generate PSI files in fixed-point arithmetic without the three-address form
-  originalProgram: Program = null,
-
   // Information we want to persist through phases,
   // but don't want to pollute the nice and clean trees.
   // If these get too many, move to their own "Summary".

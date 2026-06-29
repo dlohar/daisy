@@ -75,12 +75,6 @@ object Main {
       "noInitialErrors",
       "Do not track initial errors specified by user"),
     FlagOption(
-      "probabilisticError",
-      "Runs the probabilistic error phase."),
-    FlagOption(
-      "probabilistic",
-      "Runs the probabilistic phase. Requires a file with thresholds"),
-    FlagOption(
       "pow-roll",
       "Roll products, e.g. x*x*x -> pow(x, 3)"
     ),
@@ -140,8 +134,6 @@ object Main {
     analysis.RelativeErrorPhase,
     analysis.TaylorErrorPhase,
     analysis.DataflowSubdivisionPhase,
-    analysis.ProbabilisticBranchesPhase,
-    analysis.MPFRProbabilisticDataflowPhase,
     backend.CodeGenerationPhase,
     transform.TACTransformerPhase,
     transform.PowTransformerPhase,
@@ -334,11 +326,6 @@ object Main {
         backend.InfoPhase >>
         backend.CodeGenerationPhase
 
-    } else if (ctx.hasFlag("probabilistic")) {
-      pipeline >>= analysis.ProbabilisticBranchesPhase
-
-    } else if (ctx.hasFlag("probabilisticError")) {
-      pipeline >>= analysis.MPFRProbabilisticDataflowPhase
     } else if (ctx.hasFlag("ds") && !ctx.hasFlag("unroll")) {
       pipeline >>= analysis.DSAbstractionPhase
       pipeline >>= backend.InfoPhase
@@ -442,17 +429,6 @@ object Main {
             name -> default
         }
       }
-
-        case DoubleOption(name, default, _) => argsMap.get(name) match {
-          case None => name -> default
-          case Some(s) => try {
-            name -> s.toDouble
-          } catch {
-            case e: NumberFormatException =>
-              initReporter.warning("Can't parse argument for option $name, using default")
-              name -> default
-          }
-        }
 
       case ChoiceOption(name, choices, default, _) => argsMap.get(name) match {
         case Some(s) if choices.keySet.contains(s) => name -> choices(s)

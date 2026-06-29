@@ -24,9 +24,7 @@ private[tools] case class MPFRDeviation(mgnt: MPFRInterval, index: Int) {
   def *(factor: MPFRInterval): MPFRDeviation = {
     MPFRDeviation(this.mgnt * factor, index)
   }
-
-  def isZero: Boolean = (mgnt == MPFRInterval.zero)
-
+  def isZero: Boolean = (mgnt == izero)
 
   override def toString: String = "%s(%d)".format(mgnt.toString, index)
 }
@@ -53,7 +51,6 @@ object MPFRAffineForm {
 
   def apply(r: Rational): MPFRAffineForm =
     MPFRAffineForm(MPFRInterval(r), Seq[MPFRDeviation]())
-
 
   // def +/-(x: MPFRInterval): MPFRAffineForm = {
   //   MPFRAffineForm(MPFRInterval(MPFRFloat.zero), Seq(MPFRDeviation(x, MPFRAffineIndex.nextGlobal)))
@@ -142,7 +139,6 @@ case class MPFRAffineForm(x0: MPFRInterval, noise: Seq[MPFRDeviation]) extends R
 
   def *(y: MPFRAffineForm): MPFRAffineForm = {
     var z0 = this.x0 * y.x0
-
     //println("M-z0: " + z0)
 
     // z0Addition is not necessarily used, depending on which fnc you use

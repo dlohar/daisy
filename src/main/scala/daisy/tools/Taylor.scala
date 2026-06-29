@@ -616,15 +616,15 @@ trait Taylor extends DeltaAbstractionUtils with RangeEvaluators {
    * @return expression
    */
   def getPartialDerivative(e: Expr, wrt: Identifier): Expr = e match {
-    case x @ Delta(id) if wrt.equals(id) => one
+    case x @ Delta(id) if wrt.equals(id) =>
+      one
     case x @ Delta(id) => zero
-      
-    case x @ Epsilon(id) if wrt.equals(id) => one
+      // for the remainder term we will also compute partial derivative wrt Epsilons
+    case x @ Epsilon(id) if wrt.equals(id) =>
+      one
     case x @ Epsilon(id) => zero
 
-    case x @ Variable(id) if wrt.equals(id) => one
     case x @ Variable(id) => zero
-
     case x @ RealLiteral(r) => zero
     case x @ UMinus(in) => UMinus(getPartialDerivative(in, wrt))
 
@@ -827,7 +827,7 @@ trait Taylor extends DeltaAbstractionUtils with RangeEvaluators {
    */
   private def containsVariables(e: Expr, wrt: Identifier): Boolean = exists{
     // if we compute w.r.t. this delta or epsilon, it's a var
-    case Delta(`wrt`) | Epsilon(`wrt`) | Variable(`wrt`) => true
+    case Delta(`wrt`) | Epsilon(`wrt`) => true
   }(e)
 
   /**

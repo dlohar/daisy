@@ -8,7 +8,6 @@ import utils.UniqueCounter
 
 import Rational.{zero => rzero, _}
 
-
 private[tools] case class Deviation(mgnt: Rational, index: Int) {
   def unary_- = Deviation(-mgnt, index)
   def +(y: Deviation): Deviation = {
@@ -54,14 +53,11 @@ object AffineForm {
 }
 
 
-case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmetic[AffineForm] with AffineTools[Deviation] {
+case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmetic[AffineForm] {
 
   if (noise.size > 200) {
     System.err.println("200 noise terms")
   }
-
-  // Int.MaxValue is necessary for correctness, as we compare indices
-  val dummyDev = Deviation(rzero, Int.MaxValue)
 
   lazy val radius: Rational = sumAbsQueue(noise)
 
@@ -95,7 +91,7 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
     // z0Addition is not necessarily used, depending on which fnc you use
     val (z0Addition, delta) = multiplyQueuesOptimized(this.noise, y.noise)
     z0 += z0Addition
-    var newTerms: Seq[Deviation] = multiplyLinearPart(this.x0, this.noise, y.x0, y.noise)
+    var newTerms: Seq[Deviation] = multiplyQueuesAndMerge(this.x0, this.noise, y.x0, y.noise)
     if(delta != 0) {
       newTerms :+= Deviation(delta, AffineIndex.nextGlobal)
     }
@@ -372,7 +368,6 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
 
   def detailString: String = x0.toDouble + " +/- " + radius.toDouble
 
-
   private def computeZeta(dmin: Rational, dmax: Rational): Rational = {
     dmin / two +  dmax / two
   }
@@ -499,10 +494,8 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
       val yi = yqueue.find((d: Deviation) => d.index == iInd) match {
         case Some(d) => d.mgnt; case None => rzero }
       val zii = xi * yi
-      if (zii != 0) {
-        z0Addition += zii / two
-        zqueue += abs(zii / two)
-      }
+      z0Addition += zii / two
+      if (zii != 0) zqueue += abs(zii / two)
 
       var j = i + 1
       while (j < indices.length) {
@@ -518,6 +511,23 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
       i += 1
     }
     (z0Addition, zqueue)
+  }
+
+  private def mergeIndices(x: Set[Int], y: Set[Int]): Array[Int] = {
+    val set = x ++ y
+    val list = set.toList.sorted
+    list.toArray
+  }
+
+  // Do this with some functional thing?
+  private def getIndices(q: Seq[Deviation]): collection.immutable.Set[Int] = {
+    var i = 0
+    var set = new collection.immutable.HashSet[Int]()
+    while (i < q.size) {
+      set += q(i).index
+      i += 1
+    }
+    set
   }
 
   private def multiplyQueue(queue: Seq[Deviation], factor: Rational): Seq[Deviation] = {
@@ -540,7 +550,6 @@ case class AffineForm(x0: Rational, noise: Seq[Deviation]) extends RangeArithmet
     if (delta != rzero) deviation :+= Deviation(delta, AffineIndex.nextGlobal)
     AffineForm(z0, deviation)
   }
-
 }
 
 
