@@ -1,0 +1,11 @@
+Bspline1, 14.8814
+Doppler, 13.7
+Func, 7.7157
+Himmilbeau, 28.1213
+InvertedPendulum, 12.4471
+Kepler1, 44.5569
+RigidBody1, 13.0385
+Sine, 33.5971
+Sqrt, 25.8628
+Traincar4_State8, 48.8443
+Turbine1, 26.8885
