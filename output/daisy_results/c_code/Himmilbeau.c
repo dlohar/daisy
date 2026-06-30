@@ -22,6 +22,7 @@ double himmilbeau(double x1, double x2) {
   double _tmp9 = (x1 + _tmp8);
   double _tmp11 = (_tmp9 - _const3);
   double _tmp13 = (_tmp10 * _tmp11);
-  return (_tmp12 + _tmp13);
+  double result = (_tmp12 + _tmp13);
+  return result;
 } // [-1630.0, 3050.0] +/- 2.3252511027749283e-12
 

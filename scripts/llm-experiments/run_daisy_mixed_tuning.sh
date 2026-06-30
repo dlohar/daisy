@@ -1,6 +1,6 @@
 #!/bin/bash
 
-TESTCASE_DIR="testcases/llm"
+TESTCASE_DIR="testcases/llm/test-bench"
 OUTPUT_DIR="output/daisy_results"
 COST_FILE="$OUTPUT_DIR/costs.txt"
 C_OUTPUT_DIR="$OUTPUT_DIR/c_code"
@@ -33,7 +33,7 @@ for testcase in "$TESTCASE_DIR"/*.scala; do
     echo "Running: $benchmark"
 
     # Run Daisy
-    output=$(sbt -batch "run --mixed-tuning --precision=Float64 --codegen --lang=C $testcase" 2>&1)
+    output=$(sbt -batch "run --mixed-tuning --precision=Quad --codegen --lang=C $testcase" 2>&1)
     echo "$output"
 
     # Check if error bound was not satisfied

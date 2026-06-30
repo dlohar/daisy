@@ -3,10 +3,10 @@
 
 /* @pre: ((-4.5 <= v) && (v <= -0.3) && (0.4 <= w) && (w <= 0.9) && (3.8 <= r) && (r <= 7.8)) */
 /* @post: (res) => (res +/- 2.5e-05) */
-double turbine1(double v, double w, float r) {
+double turbine1(double v, double w, double r) {
   float _const0 = 2.0f;
   float _const1 = 3.0f;
-  double _const2 = 2;
+  float _const2 = 2.0f;
   double _const3 = 3;
   double _const4 = 0.125;
   double _const5 = 1;
@@ -24,6 +24,7 @@ double turbine1(double v, double w, float r) {
   double _tmp9 = (_const5 - v);
   double _tmp11 = (_tmp8 / _tmp9);
   double _tmp12 = (_tmp10 - _tmp11);
-  return (_tmp12 - _const6);
-} // [-58.32912689020381, -1.5505285721480735] +/- 3.656772343479721e-06
+  double result = (_tmp12 - _const6);
+  return result;
+} // [-58.32912689020381, -1.5505285721480735] +/- 8.648499855918151e-14
 

@@ -13,6 +13,7 @@ double doppler(float u, float v, float T) {
   double _tmp2 = (t1 + u);
   double _tmp3 = (t1 + u);
   double _tmp5 = (_tmp2 * _tmp3);
-  return (_tmp4 / _tmp5);
+  double result = (_tmp4 / _tmp5);
+  return result;
 } // [-158.7191444098274, -0.02944244059231351] +/- 2.389686436884487e-05
 

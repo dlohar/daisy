@@ -27,6 +27,7 @@ double kepler1(float x1, float x2, float x3, double x4) {
   double _tmp20 = (_tmp18 - _tmp19);
   double _tmp21 = (x1 * x2);
   double _tmp22 = (_tmp20 - _tmp21);
-  return (_tmp22 - x4);
+  double result = (_tmp22 - x4);
+  return result;
 } // [-490.320768, 282.739712] +/- 8.647480357513048e-05
 

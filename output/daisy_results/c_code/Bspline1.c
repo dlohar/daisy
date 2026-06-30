@@ -15,6 +15,7 @@ double bspline1(double u) {
   double _tmp4 = (_tmp2 * u);
   double _tmp5 = (_tmp3 - _tmp4);
   double _tmp6 = (_tmp5 + _const2);
-  return (_tmp6 / _const3);
+  double result = (_tmp6 / _const3);
+  return result;
 } // [-0.3333333333333333, 1.1666666666666667] +/- 7.956598343146956e-16
 

@@ -46,6 +46,7 @@ double train4_state8(float s0, float s1, float s2, float s3, float s4, float s5,
   double _tmp24 = (_tmp22 + _tmp23);
   double _tmp25 = (_const13 * y4);
   double _tmp26 = (_tmp24 + _tmp25);
-  return (_tmp26 + _const14);
+  double result = (_tmp26 + _const14);
+  return result;
 } // [-2.0007506480973056, 12.0007457153371] +/- 4.769437984464831e-07
 

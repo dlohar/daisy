@@ -14,6 +14,7 @@ double invpendulum(double s1, double s2, double s3, float s4) {
   double _tmp3 = (_const2 * s3);
   double _tmp4 = (_tmp2 + _tmp3);
   double _tmp5 = (_const3 * s4);
-  return (_tmp4 + _tmp5);
+  double result = (_tmp4 + _tmp5);
+  return result;
 } // [-83.950668, 83.950668] +/- 1.4477789706393797e-06
 
