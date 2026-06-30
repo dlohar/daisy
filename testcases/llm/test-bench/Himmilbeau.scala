@@ -15,6 +15,7 @@ object Himmilbeau {
   // 0.5 f32
   def himmilbeau(x1: Real, x2: Real) = {
     require(-5 <= x1 && x1 <= 5 && -5 <= x2 && x2 <= 5)
-    (x1*x1 + x2 - 11)*(x1 * x1 + x2 - 11) + (x1 + x2*x2 - 7)*(x1 + x2*x2 - 7)
+    val result = (x1*x1 + x2 - 11)*(x1 * x1 + x2 - 11) + (x1 + x2*x2 - 7)*(x1 + x2*x2 - 7)
+    result
   } ensuring(res => res +/- 2.75e-4)
 }

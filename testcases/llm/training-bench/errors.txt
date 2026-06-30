@@ -5,3 +5,5 @@ Sqrt, Float64, precision-map1, 3.0575542098176816e-13, 30.46
 Sqrt, Quad, precision-map2, 3.6911651090396617e-31, 42.3504
 Sine, Float64, precision-map1, 2.151002475682945e-07, 38.1091
 Sine, Float64, precision-map2, 1.1296729607621835e-15, 33.5971
+RigidBody1, Float64, precision-map1, 3.67164616354998e-05, 13.0314
+RigidBody1, Quad, precision-map2, 2.1457672147562334e-05, 20.8731

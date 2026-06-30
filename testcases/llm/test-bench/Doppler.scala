@@ -9,7 +9,8 @@ object Doppler {
     require(-100.0 <= u && u <= 100 && 20 <= v && v <= 20000 && -30 <= T && T <= 50)
 
     val t1 = 331.4 + 0.6 * T
-    (- (t1) *v) / ((t1 + u)*(t1 + u))
+    val result = (- (t1) *v) / ((t1 + u)*(t1 + u))
+    result
 
   } ensuring(res => res +/- 1.25e-4)
 }

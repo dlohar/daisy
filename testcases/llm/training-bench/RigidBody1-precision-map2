@@ -1,0 +1,6 @@
+rigidBody1 = {
+  x1: Float64
+  x2: Float32
+  x3: Quad
+  result: Quad
+}
