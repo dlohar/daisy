@@ -1,0 +1,4 @@
+sine = {
+  x: Float32
+  result: Quad
+}

@@ -1,0 +1,4 @@
+sine = {
+  x: Float64
+  result: Float64
+}

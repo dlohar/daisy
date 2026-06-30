@@ -1093,6 +1093,53 @@ def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identif
       case DoubleDouble => Rational.fromReal(20.0)
     }
 
+    // typeConfig extended with fresh temp precisions introduced during TAC conversion.
+    // Literals → defaultPrecision; tmp precision = max of operand precisions.
+    var extTypeConfig: Map[Identifier, Precision] = typeConfig
+    var tmpCount = 0
+
+    def atomicPrec(e: Expr): Precision = e match {
+      case Variable(id) => extTypeConfig.getOrElse(id, defaultPrecision)
+      case _            => defaultPrecision
+    }
+
+    // Flatten a compound expression into TAC bindings.
+    // Returns (bindings, singleOpExpr, precision) where singleOpExpr is a single
+    // arithmetic operation whose arguments are all Variables or Literals.
+    def flatten(e: Expr): (List[(Identifier, Expr)], Expr, Precision) = e match {
+      case _: Variable | _: RealLiteral | _: Int32Literal =>
+        (Nil, e, atomicPrec(e))
+      case ArithOperator(args, recons) =>
+        var allBindings: List[(Identifier, Expr)] = Nil
+        val atomicAndPrecs: List[(Expr, Precision)] = args.toList.map {
+          case a @ (_: Variable | _: RealLiteral | _: Int32Literal) =>
+            (a, atomicPrec(a))
+          case arg =>
+            val (subBindings, subExpr, subPrec) = flatten(arg)
+            allBindings = allBindings ++ subBindings
+            tmpCount += 1
+            val tmp = FreshIdentifier(s"_tmp${tmpCount}")
+            extTypeConfig = extTypeConfig + (tmp -> subPrec)
+            allBindings = allBindings :+ (tmp, subExpr)
+            (Variable(tmp), subPrec)
+        }
+        val atomicArgs = atomicAndPrecs.map(_._1)
+        val argPrecs   = atomicAndPrecs.map(_._2)
+        val opPrec     = argPrecs.reduce((a, b) => getUpperBound(a, b))
+        (allBindings, recons(atomicArgs), opPrec)
+    }
+
+    // Convert a Let chain to TAC form, extending extTypeConfig with temp precisions.
+    def toTAC(e: Expr): Expr = e match {
+      case Let(id, value, body) =>
+        val (bindings, atomicValue, valuePrec) = flatten(value)
+        val idPrec = typeConfig.getOrElse(id, valuePrec)
+        extTypeConfig = extTypeConfig + (id -> idPrec)
+        val mainLet = Let(id, atomicValue, toTAC(body))
+        bindings.foldRight(mainLet) { case ((tid, texpr), b) => Let(tid, texpr, b) }
+      case _ => e
+    }
+
     def eval(e: Expr): Rational = (e: @unchecked) match {
 
       // constant declarations
@@ -1108,8 +1155,8 @@ def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identif
 
       // left is literal, right is variable
       case Let(id, ArithOperator(Seq(RealLiteral(_), z @ Variable(r)), recons), body) =>
-        val rPrec  = typeConfig(r)
-        val idPrec = typeConfig(id)
+        val rPrec  = extTypeConfig(r)
+        val idPrec = extTypeConfig(id)
         val opPrec = getUpperBound(getUpperBound(rPrec, defaultPrecision), idPrec)
         val opCost = (recons(Seq(z, z)): @unchecked) match {
           case _: Plus     => plusCost(opPrec)
@@ -1125,8 +1172,8 @@ def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identif
 
       // left is variable, right is literal
       case Let(id, ArithOperator(Seq(y @ Variable(l), RealLiteral(_)), recons), body) =>
-        val lPrec  = typeConfig(l)
-        val idPrec = typeConfig(id)
+        val lPrec  = extTypeConfig(l)
+        val idPrec = extTypeConfig(id)
         val opPrec = getUpperBound(getUpperBound(lPrec, defaultPrecision), idPrec)
         val opCost = (recons(Seq(y, y)): @unchecked) match {
           case _: Plus     => plusCost(opPrec)
@@ -1141,23 +1188,23 @@ def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identif
         (opCost + castCosts + eval(body))
 
       case Let(id, UMinus(Variable(t)), body) =>
-        val tPrec  = typeConfig(t)
-        val idPrec = typeConfig(id)
+        val tPrec  = extTypeConfig(t)
+        val idPrec = extTypeConfig(id)
         val opCost = uminusCost(tPrec)
         val castCosts = if (idPrec < tPrec) castCost(tPrec, idPrec) else zero
         (opCost + castCosts + eval(body))
 
       case Let(id, Sqrt(Variable(t)), body) =>
-        val tPrec  = typeConfig(t)
-        val idPrec = typeConfig(id)
+        val tPrec  = extTypeConfig(t)
+        val idPrec = extTypeConfig(id)
         val opCost = sqrtCost(tPrec)
         val castCosts = if (idPrec < tPrec) castCost(tPrec, idPrec) else zero
         (opCost + castCosts + eval(body))
 
       case Let(id, ArithOperator(Seq(y @ Variable(l), z @ Variable(r)), recons), body) =>
-        val lPrec  = typeConfig(l)
-        val rPrec  = typeConfig(r)
-        val idPrec = typeConfig(id)
+        val lPrec  = extTypeConfig(l)
+        val rPrec  = extTypeConfig(r)
+        val idPrec = extTypeConfig(id)
         val opPrec = getUpperBound(getUpperBound(lPrec, rPrec), idPrec)
         val opCost = (recons(Seq(y, z)): @unchecked) match {
           case _: Plus     => plusCost(opPrec)
@@ -1172,15 +1219,15 @@ def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identif
         (opCost + castCosts + eval(body))
 
       case Let(id, ArithOperator(Seq(y @ Variable(t)), recons), body) =>
-        val tPrec  = typeConfig(t)
-        val idPrec = typeConfig(id)
+        val tPrec  = extTypeConfig(t)
+        val idPrec = extTypeConfig(id)
         val opCost = transCost(tPrec)
         val castCosts = if (idPrec < tPrec) castCost(tPrec, idPrec) else zero
         (opCost + castCosts + eval(body))
 
       // non-Let cases
       case ArithOperator(Seq(RealLiteral(_), z @ Variable(r)), recons) =>
-        val rPrec  = typeConfig(r)
+        val rPrec  = extTypeConfig(r)
         val opPrec = getUpperBound(rPrec, defaultPrecision)
         (recons(Seq(z, z)): @unchecked) match {
           case _: Plus     => plusCost(opPrec)
@@ -1190,7 +1237,7 @@ def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identif
         }
 
       case ArithOperator(Seq(y @ Variable(l), RealLiteral(_)), recons) =>
-        val lPrec  = typeConfig(l)
+        val lPrec  = extTypeConfig(l)
         val opPrec = getUpperBound(lPrec, defaultPrecision)
         (recons(Seq(y, y)): @unchecked) match {
           case _: Plus     => plusCost(opPrec)
@@ -1200,8 +1247,8 @@ def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identif
         }
 
       case ArithOperator(Seq(y @ Variable(l), z @ Variable(r)), recons) =>
-        val lPrec  = typeConfig(l)
-        val rPrec  = typeConfig(r)
+        val lPrec  = extTypeConfig(l)
+        val rPrec  = extTypeConfig(r)
         val opPrec = getUpperBound(lPrec, rPrec)
         val opCost = (recons(Seq(y, z)): @unchecked) match {
           case _: Plus     => plusCost(opPrec)
@@ -1217,13 +1264,13 @@ def benchmarkedMixedPrecisionCostWithDefault(expr: Expr, typeConfig: Map[Identif
       case Variable(_) => zero
 
       case UMinus(Variable(t)) =>
-        uminusCost(typeConfig(t))
+        uminusCost(extTypeConfig(t))
 
       case Sqrt(Variable(t)) =>
-        sqrtCost(typeConfig(t))
+        sqrtCost(extTypeConfig(t))
 
     }
-    eval(expr)
+    eval(toTAC(expr))
   }
 
 

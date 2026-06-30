@@ -1,0 +1,4 @@
+sqroot = {
+  x: Quad
+  result: Quad
+}

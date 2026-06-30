@@ -1,0 +1,7 @@
+Name, Default Precision, Precision Map, Error, Cost
+Func, Float64, precision-map1, 3.4769378256157185e-07, 10.1172
+Func, Quad, precision-map2, 1.1920929243736114e-07, 16.6114
+Sqrt, Float64, precision-map1, 3.0575542098176816e-13, 30.46
+Sqrt, Quad, precision-map2, 3.6911651090396617e-31, 42.3504
+Sine, Float64, precision-map1, 2.151002475682945e-07, 38.1091
+Sine, Float64, precision-map2, 1.1296729607621835e-15, 33.5971

@@ -1,0 +1,4 @@
+sqroot = {
+  x: Float64
+  result: Quad
+}
