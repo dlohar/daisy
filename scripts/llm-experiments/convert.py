@@ -9,15 +9,10 @@
 #   Single file:
 #     python3 convert.py <input.scala> <output.scala>
 #
-# INPUT FORMAT (qnn):
-#   - Weights and biases are defined as local val inside the function body.
-#   - Input bounds are given via lowerBounds(x, List(...)) / upperBounds(x, List(...)).
-#   - Layers are computed as: val layerN = relu/linear(weightsN * prev + biasN)
-#
 # OUTPUT FORMAT (ds2l / --ds):
 #   - Weights and biases become function parameters (Matrix / Vector types).
 #   - The require block contains specM/specV constraints for each parameter,
-#     grouping entries with similar values into shared intervals (±0.01 padding).
+#     grouping entries with similar values into shared intervals (0.01 padding).
 #   - relu layers are rewritten as: (W.x(prev) + b).map(el => { relu.max() })
 #   - linear layers are rewritten as: (W.x(prev) + b)
 
